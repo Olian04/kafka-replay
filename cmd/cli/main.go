@@ -133,6 +133,7 @@ func main() {
 					&cli.BoolFlag{
 						Name:  "create-topic",
 						Usage: "Create the topic if it doesn't exist",
+						Value: false,
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -162,27 +163,8 @@ func main() {
 					defer reader.Close()
 
 					// Create Kafka producer
-					producer := pkg.NewProducer(brokers, topic)
+					producer := pkg.NewProducer(brokers, topic, createTopic)
 					defer producer.Close()
-
-					// Check if topic exists or create it
-					if createTopic {
-						fmt.Printf("Creating topic '%s' if it doesn't exist...\n", topic)
-						if err := producer.CreateTopicIfNotExists(ctx, 1, 1); err != nil {
-							return fmt.Errorf("failed to create topic: %w", err)
-						}
-						fmt.Printf("Topic '%s' is ready\n", topic)
-					} else {
-						// Check if topic exists
-						if err := producer.EnsureTopicExists(ctx); err != nil {
-							panic(fmt.Sprintf(
-								"ERROR: Topic '%s' does not exist on brokers %v.\n"+
-									"The replay command requires the topic to exist before writing messages.\n"+
-									"To automatically create the topic, use the --create-topic flag:",
-								topic, brokers,
-							))
-						}
-					}
 
 					messageCount, err := pkg.Replay(ctx, producer, reader, rate)
 					if err != nil {

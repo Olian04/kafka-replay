@@ -12,6 +12,6 @@ func NewKafkaConsumer(ctx context.Context, brokers []string, topic string, parti
 }
 
 // NewProducer creates a new Kafka producer
-func NewProducer(brokers []string, topic string) *kafkapkg.Producer {
-	return kafkapkg.NewProducer(brokers, topic)
+func NewProducer(brokers []string, topic string, allowAutoTopicCreation bool) *kafkapkg.Producer {
+	return kafkapkg.NewProducer(brokers, topic, allowAutoTopicCreation)
 }

@@ -20,7 +20,8 @@ replay:
 	./kafka-replay replay \
 		--broker=localhost:19092 \
 		--topic=new-topic \
-		--input=messages.log
+		--input=messages.log \
+		--create-topic
 
 .PHONY: cat
 cat:
