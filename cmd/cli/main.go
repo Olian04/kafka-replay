@@ -49,7 +49,7 @@ func main() {
 						Name:    "output",
 						Aliases: []string{"o"},
 						Usage:   "Output file path for recorded messages",
-						Value:   "kafka-record.jsonl",
+						Value:   "messages.log",
 					},
 					&cli.BoolFlag{
 						Name:  "from-beginning",
@@ -130,6 +130,10 @@ func main() {
 						Name:  "preserve-timestamps",
 						Usage: "Preserve original message timestamps",
 					},
+					&cli.BoolFlag{
+						Name:  "create-topic",
+						Usage: "Create the topic if it doesn't exist",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					brokers := cmd.StringSlice("broker")
@@ -137,6 +141,7 @@ func main() {
 					input := cmd.String("input")
 					rate := cmd.Int("rate")
 					preserveTimestamps := cmd.Bool("preserve-timestamps")
+					createTopic := cmd.Bool("create-topic")
 
 					fmt.Printf("Replaying messages to topic '%s' on brokers %v\n", topic, brokers)
 					fmt.Printf("Input file: %s\n", input)
@@ -159,6 +164,25 @@ func main() {
 					// Create Kafka producer
 					producer := pkg.NewProducer(brokers, topic)
 					defer producer.Close()
+
+					// Check if topic exists or create it
+					if createTopic {
+						fmt.Printf("Creating topic '%s' if it doesn't exist...\n", topic)
+						if err := producer.CreateTopicIfNotExists(ctx, 1, 1); err != nil {
+							return fmt.Errorf("failed to create topic: %w", err)
+						}
+						fmt.Printf("Topic '%s' is ready\n", topic)
+					} else {
+						// Check if topic exists
+						if err := producer.EnsureTopicExists(ctx); err != nil {
+							panic(fmt.Sprintf(
+								"ERROR: Topic '%s' does not exist on brokers %v.\n"+
+									"The replay command requires the topic to exist before writing messages.\n"+
+									"To automatically create the topic, use the --create-topic flag:",
+								topic, brokers,
+							))
+						}
+					}
 
 					messageCount, err := pkg.Replay(ctx, producer, reader, rate)
 					if err != nil {
