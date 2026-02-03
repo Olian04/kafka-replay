@@ -7,6 +7,7 @@ import (
 	"time"
 
 	kafka "github.com/lolocompany/kafka-replay/pkg/kafka"
+	"github.com/schollz/progressbar/v3"
 )
 
 const (
@@ -24,6 +25,17 @@ func Record(ctx context.Context, consumer *kafka.Consumer, fromBeginning bool, o
 			return 0, 0, err
 		}
 	}
+
+	// Initialize progress bar
+	// If limit is 0 (unlimited), use -1 to create a spinner
+	// Otherwise, use limit as the total
+	var bar *progressbar.ProgressBar
+	if limit > 0 {
+		bar = progressbar.Default(int64(limit), "Recording messages")
+	} else {
+		bar = progressbar.Default(-1, "Recording messages")
+	}
+	defer bar.Close()
 
 	var totalBytes int64
 	var messageCount int64
@@ -82,6 +94,11 @@ func Record(ctx context.Context, consumer *kafka.Consumer, fromBeginning bool, o
 		totalBytes += messageSize
 
 		messageCount++
+
+		// Update progress bar
+		if err := bar.Add(1); err != nil {
+			// Ignore progress bar errors, continue recording
+		}
 	}
 
 	return totalBytes, messageCount, nil

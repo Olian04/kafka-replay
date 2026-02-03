@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"time"
 )
 
-func Cat(ctx context.Context, input string) error {
+func Cat(ctx context.Context, input string, formatter func(msg *LogFileMessage) string) error {
 	// Create log file reader (preserve timestamps for display)
 	reader, err := NewLogFileReader(input, true)
 	if err != nil {
@@ -36,7 +35,8 @@ func Cat(ctx context.Context, input string) error {
 		}
 
 		// Display message
-		fmt.Printf("[%s] [%d bytes] %s\n", msg.Timestamp.Format(time.RFC3339Nano), len(msg.Data), string(msg.Data))
+		formattedMessage := formatter(msg)
+		fmt.Printf("%s\n", formattedMessage)
 
 		messageCount++
 	}

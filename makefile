@@ -1,6 +1,6 @@
 .PHONY: build
 build: clean
-	go build -o kafka-replay cmd/cli/main.go
+	go build -o kafka-replay ./cmd/cli
 
 .PHONY: clean
 clean:
@@ -9,7 +9,7 @@ clean:
 .PHONY: record
 record:
 	./kafka-replay record \
-		--broker=localhost:19092 \
+		--broker=redpanda:9092 \
 		--topic=test-topic \
 		--group-id=test-consumer-group \
 		--output=messages.log \
@@ -18,7 +18,7 @@ record:
 .PHONY: replay
 replay:
 	./kafka-replay replay \
-		--broker=localhost:19092 \
+		--broker=redpanda:9092 \
 		--topic=new-topic \
 		--input=messages.log \
 		--create-topic

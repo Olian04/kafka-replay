@@ -9,6 +9,7 @@ import (
 	"time"
 
 	kafkapkg "github.com/lolocompany/kafka-replay/pkg/kafka"
+	"github.com/schollz/progressbar/v3"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -22,8 +23,8 @@ type LogFileReader struct {
 
 // LogFileMessage represents a message read from the log file
 type LogFileMessage struct {
-	Data      []byte
-	Timestamp time.Time
+	Data      []byte    `json:"data"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // NewLogFileReader creates a new reader for binary log files
@@ -110,6 +111,18 @@ func (r *LogFileReader) Close() error {
 	return nil
 }
 
+// FileSize returns the size of the underlying file
+func (r *LogFileReader) FileSize() (int64, error) {
+	if r.file == nil {
+		return 0, fmt.Errorf("file is nil")
+	}
+	stat, err := r.file.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return stat.Size(), nil
+}
+
 const (
 	// DefaultBatchSize is the default number of messages to batch before writing
 	DefaultBatchSize = 100
@@ -118,6 +131,16 @@ const (
 )
 
 func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *LogFileReader, rate int) (int64, error) {
+	// Get file size for progress bar
+	fileSize, err := reader.FileSize()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get file size: %w", err)
+	}
+
+	// Initialize progress bar based on file size
+	bar := progressbar.DefaultBytes(fileSize, "Replaying messages")
+	defer bar.Close()
+
 	// Rate limiting setup
 	var rateLimiter *time.Ticker
 	if rate > 0 {
@@ -127,6 +150,7 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *LogFileRea
 	}
 
 	var messageCount int64
+	var bytesRead int64 // Track total bytes read from file
 	batch := make([]kafka.Message, 0, DefaultBatchSize)
 	var batchBytes int64
 
@@ -163,6 +187,8 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *LogFileRea
 				if err := flushBatch(); err != nil {
 					return messageCount, err
 				}
+				// Update progress bar to 100%
+				bar.Set64(fileSize)
 				break
 			}
 			// Check if context was canceled
@@ -174,6 +200,16 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *LogFileRea
 				return messageCount, ctx.Err()
 			}
 			return messageCount, err
+		}
+
+		// Calculate bytes read for this message:
+		// TimestampSize (27) + SizeFieldSize (8) + messageData size
+		messageBytesRead := TimestampSize + SizeFieldSize + int64(len(msg.Data))
+		bytesRead += messageBytesRead
+
+		// Update progress bar
+		if err := bar.Set64(bytesRead); err != nil {
+			// Ignore progress bar errors, continue replaying
 		}
 
 		// Rate limiting - if enabled, wait before adding to batch
@@ -205,10 +241,6 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *LogFileRea
 			if err := flushBatch(); err != nil {
 				return messageCount, err
 			}
-		}
-
-		if messageCount%1000 == 0 {
-			fmt.Printf("Replayed %d messages...\n", messageCount)
 		}
 	}
 

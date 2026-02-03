@@ -2,8 +2,8 @@ package kafka
 
 import (
 	"context"
+	"fmt"
 	"io"
-	"strings"
 	"sync"
 
 	"github.com/segmentio/kafka-go"
@@ -211,9 +211,18 @@ func (r *messageReader) Close() error {
 }
 
 func NewKafkaConsumer(ctx context.Context, brokers []string, topic string, partition int) (*Consumer, error) {
-	conn, err := kafka.DialLeader(ctx, "tcp", strings.Join(brokers, ","), topic, partition)
+	// DialLeader expects a single broker address - it will discover the leader from metadata
+	// Try each broker until one works
+	var conn *kafka.Conn
+	var err error
+	for _, broker := range brokers {
+		conn, err = kafka.DialLeader(ctx, "tcp", broker, topic, partition)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to connect to any broker: %w", err)
 	}
 
 	return &Consumer{
