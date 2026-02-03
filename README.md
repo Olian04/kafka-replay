@@ -156,7 +156,7 @@ Replay with original timestamps preserved:
 
 #### Cat
 
-Display recorded messages from a log file in human-readable format.
+Display recorded messages from a message file in human-readable format.
 
 ```bash
 ./kafka-replay cat --input messages.log
@@ -174,9 +174,16 @@ Display recorded messages from a log file in human-readable format.
 
 Output format:
 
+Each message is displayed as a JSON object on a single line:
+
+```json
+{"timestamp":"2026-02-02T10:15:30.123456789Z","data":"{\"message\":\"test\"}"}
+{"timestamp":"2026-02-02T10:15:31.234567890Z","data":"{\"message\":\"another\"}"}
 ```
-[2026-02-02T10:15:30.123456Z] [123 bytes] {"timestamp":"...","message":"..."}
-```
+
+The output format includes:
+- `timestamp`: ISO 8601 timestamp (RFC3339Nano format) when the message was recorded
+- `data`: The message content as a string
 
 ### File Format
 
