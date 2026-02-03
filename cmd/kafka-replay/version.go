@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
-	"strings"
 
 	"github.com/urfave/cli/v3"
 )
@@ -34,15 +33,6 @@ func getVersion() string {
 		for _, dep := range info.Deps {
 			if dep.Path == "github.com/lolocompany/kafka-replay" {
 				if dep.Version != "" && dep.Version != "(devel)" {
-					// Handle pseudo-versions in dependencies too
-					if strings.Contains(dep.Version, "-") {
-						parts := strings.Split(dep.Version, "-")
-						if len(parts) > 0 {
-							baseVersion := parts[0]
-							baseVersion = strings.TrimSuffix(baseVersion, "+dirty")
-							return baseVersion
-						}
-					}
 					return dep.Version
 				}
 			}
