@@ -38,7 +38,19 @@ Kafka Replay provides a simple, efficient solution for these use cases with a st
 - Access to a Kafka/Redpanda cluster
 - Docker and Docker Compose (for local development)
 
-### Building
+### Installation
+
+#### Install using go install (Recommended)
+
+```bash
+go install github.com/lolocompany/kafka-replay/cmd/kafka-replay@latest
+```
+
+This will install the `kafka-replay` binary to `$GOPATH/bin` (or `$HOME/go/bin` if `GOPATH` is not set). Make sure this directory is in your `PATH`.
+
+#### Build from source
+
+If you prefer to build from source:
 
 ```bash
 make build
