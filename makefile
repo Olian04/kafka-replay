@@ -1,6 +1,6 @@
 .PHONY: build
 build: clean
-	go build -o kafka-replay ./cmd/cli
+	go build -o kafka-replay ./cmd/kafka-replay
 
 .PHONY: clean
 clean:
