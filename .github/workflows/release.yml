@@ -82,6 +82,18 @@ jobs:
             - macOS ARM64 (Apple Silicon)
             - Windows AMD64
             - Windows ARM64
+
+            ## macOS Gatekeeper
+
+            If you encounter a Gatekeeper warning when running the macOS binaries ("Apple could not verify..."), you can bypass it by running:
+
+            ```bash
+            # For Apple Silicon (ARM64)
+            xattr -d com.apple.quarantine kafka-replay-darwin-arm64
+
+            # For Intel (AMD64)
+            xattr -d com.apple.quarantine kafka-replay-darwin-amd64
+            ```
           files: |
             kafka-replay-linux-amd64
             kafka-replay-linux-arm64

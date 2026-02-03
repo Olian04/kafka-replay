@@ -48,6 +48,24 @@ go install github.com/lolocompany/kafka-replay/cmd/kafka-replay@latest
 
 This will install the `kafka-replay` binary to `$GOPATH/bin` (or `$HOME/go/bin` if `GOPATH` is not set). Make sure this directory is in your `PATH`.
 
+#### Download pre-built binaries
+
+Pre-built binaries are available in the [Releases](https://github.com/lolocompany/kafka-replay/releases) section for Linux, macOS, and Windows.
+
+**macOS Gatekeeper Note:**
+
+If you download a macOS binary and encounter a Gatekeeper warning ("Apple could not verify..."), you can bypass it by running:
+
+```bash
+xattr -d com.apple.quarantine kafka-replay-darwin-arm64
+```
+
+Or for Intel Macs:
+
+```bash
+xattr -d com.apple.quarantine kafka-replay-darwin-amd64
+```
+
 #### Build from source
 
 If you prefer to build from source:
@@ -194,6 +212,7 @@ Each message is displayed as a JSON object on a single line:
 ```
 
 The output format includes:
+
 - `timestamp`: ISO 8601 timestamp (RFC3339Nano format) when the message was recorded
 - `data`: The message content as a string
 
