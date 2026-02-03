@@ -39,6 +39,7 @@ func main() {
 			recordCommand(),
 			replayCommand(),
 			catCommand(),
+			versionCommand(),
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			// Show help when no command is provided
