@@ -5,20 +5,19 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	kafkapkg "github.com/lolocompany/kafka-replay/pkg/kafka"
-	"github.com/schollz/progressbar/v3"
 	"github.com/segmentio/kafka-go"
 )
 
 // MessageFileReader reads recorded Kafka messages from a binary file
 type MessageFileReader struct {
-	file               *os.File
+	reader             io.ReadSeeker
 	timestampBuf       []byte
 	sizeBuf            []byte
 	preserveTimestamps bool
+	timeProvider       TimeProvider
 }
 
 // RecordedMessage represents a message read from the recorded messages file
@@ -28,18 +27,14 @@ type RecordedMessage struct {
 }
 
 // NewMessageFileReader creates a new reader for binary message files
-func NewMessageFileReader(input string, preserveTimestamps bool) (*MessageFileReader, error) {
-	file, err := os.Open(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open input file: %w", err)
-	}
-
+func NewMessageFileReader(reader io.ReadSeeker, preserveTimestamps bool, timeProvider TimeProvider) *MessageFileReader {
 	return &MessageFileReader{
-		file:               file,
+		reader:             reader,
 		timestampBuf:       make([]byte, TimestampSize),
 		sizeBuf:            make([]byte, SizeFieldSize),
 		preserveTimestamps: preserveTimestamps,
-	}, nil
+		timeProvider:       timeProvider,
+	}
 }
 
 // ReadNextMessage reads the next complete message from the recorded messages file
@@ -53,7 +48,7 @@ func (r *MessageFileReader) ReadNextMessage(ctx context.Context) (*RecordedMessa
 	}
 
 	// Read timestamp (27 bytes)
-	if _, err := io.ReadFull(r.file, r.timestampBuf); err != nil {
+	if _, err := io.ReadFull(r.reader, r.timestampBuf); err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			return nil, io.EOF
 		}
@@ -61,7 +56,7 @@ func (r *MessageFileReader) ReadNextMessage(ctx context.Context) (*RecordedMessa
 	}
 
 	// Read message size (8 bytes)
-	if _, err := io.ReadFull(r.file, r.sizeBuf); err != nil {
+	if _, err := io.ReadFull(r.reader, r.sizeBuf); err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			return nil, io.EOF
 		}
@@ -75,7 +70,7 @@ func (r *MessageFileReader) ReadNextMessage(ctx context.Context) (*RecordedMessa
 
 	// Read message data
 	messageData := make([]byte, messageSize)
-	if _, err := io.ReadFull(r.file, messageData); err != nil {
+	if _, err := io.ReadFull(r.reader, messageData); err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			return nil, io.EOF
 		}
@@ -89,12 +84,12 @@ func (r *MessageFileReader) ReadNextMessage(ctx context.Context) (*RecordedMessa
 		parsedTime, err := time.Parse(TimestampFormat, timestampStr)
 		if err != nil {
 			// If timestamp parsing fails, use current time
-			msgTime = time.Now()
+			msgTime = r.timeProvider.Now()
 		} else {
 			msgTime = parsedTime
 		}
 	} else {
-		msgTime = time.Now()
+		msgTime = r.timeProvider.Now()
 	}
 
 	return &RecordedMessage{
@@ -103,32 +98,39 @@ func (r *MessageFileReader) ReadNextMessage(ctx context.Context) (*RecordedMessa
 	}, nil
 }
 
-// Close closes the underlying file
+// Close closes the underlying reader if it implements io.Closer
 func (r *MessageFileReader) Close() error {
-	if r.file != nil {
-		return r.file.Close()
+	if closer, ok := r.reader.(io.Closer); ok {
+		return closer.Close()
 	}
 	return nil
 }
 
-// FileSize returns the size of the underlying file
+// FileSize returns the size of the underlying reader if it implements Size() method,
+// otherwise returns 0. For files, use Seek to determine size.
 func (r *MessageFileReader) FileSize() (int64, error) {
-	if r.file == nil {
-		return 0, fmt.Errorf("file is nil")
-	}
-	stat, err := r.file.Stat()
+	// Try to get size using Seek
+	currentPos, err := r.reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to get current position: %w", err)
 	}
-	return stat.Size(), nil
+
+	endPos, err := r.reader.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, fmt.Errorf("failed to seek to end: %w", err)
+	}
+
+	// Restore original position
+	if _, err := r.reader.Seek(currentPos, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("failed to restore position: %w", err)
+	}
+
+	return endPos, nil
 }
 
-// Reset seeks back to the beginning of the file
+// Reset seeks back to the beginning of the reader
 func (r *MessageFileReader) Reset() error {
-	if r.file == nil {
-		return fmt.Errorf("file is nil")
-	}
-	_, err := r.file.Seek(0, io.SeekStart)
+	_, err := r.reader.Seek(0, io.SeekStart)
 	return err
 }
 
@@ -139,28 +141,42 @@ const (
 	DefaultBatchBytes = 10 * 1024 * 1024
 )
 
-func progressBarDescription(loopIteration int, loop bool) string {
-	if loop {
-		return fmt.Sprintf("Replaying messages (loop %d)", loopIteration)
-	}
-	return "Replaying messages"
+// ReplayConfig holds configuration for the Replay function
+type ReplayConfig struct {
+	Producer         *kafkapkg.Producer
+	Reader           *MessageFileReader
+	Rate             int
+	Loop             bool
+	LogWriter        io.Writer
+	ProgressReporter ProgressReporter
+	MaxBatchSize     int
+	MaxBatchBytes    int64
 }
 
-func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *MessageFileReader, rate int, loop bool) (int64, error) {
-	// Get file size for progress bar
-	fileSize, err := reader.FileSize()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get file size: %w", err)
+func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
+	if cfg.MaxBatchSize == 0 {
+		cfg.MaxBatchSize = DefaultBatchSize
+	}
+	if cfg.MaxBatchBytes == 0 {
+		cfg.MaxBatchBytes = DefaultBatchBytes
 	}
 
-	// Initialize progress bar based on file size
-	bar := progressbar.DefaultBytes(fileSize, progressBarDescription(0, loop))
-	defer bar.Close()
+	// Get file size for progress reporter if provided
+	var fileSize int64
+	if cfg.ProgressReporter != nil {
+		var err error
+		fileSize, err = cfg.Reader.FileSize()
+		if err != nil {
+			return 0, fmt.Errorf("failed to get file size: %w", err)
+		}
+		cfg.ProgressReporter.SetTotal(fileSize)
+		defer cfg.ProgressReporter.Close()
+	}
 
 	// Rate limiting setup
 	var rateLimiter *time.Ticker
-	if rate > 0 {
-		interval := time.Second / time.Duration(rate)
+	if cfg.Rate > 0 {
+		interval := time.Second / time.Duration(cfg.Rate)
 		rateLimiter = time.NewTicker(interval)
 		defer rateLimiter.Stop()
 	}
@@ -168,7 +184,7 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *MessageFil
 	var messageCount int64
 	var bytesRead int64   // Track total bytes read from file
 	var loopIteration int // Track loop iteration for display
-	batch := make([]kafka.Message, 0, DefaultBatchSize)
+	batch := make([]kafka.Message, 0, cfg.MaxBatchSize)
 	var batchBytes int64
 
 	// Flush batch helper function
@@ -176,7 +192,7 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *MessageFil
 		if len(batch) == 0 {
 			return nil
 		}
-		if err := producer.WriteMessages(ctx, batch...); err != nil {
+		if err := cfg.Producer.WriteMessages(ctx, batch...); err != nil {
 			return fmt.Errorf("failed to write batch to Kafka: %w", err)
 		}
 		batch = batch[:0] // Reset batch
@@ -197,26 +213,32 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *MessageFil
 		}
 
 		// Read next complete message
-		msg, err := reader.ReadNextMessage(ctx)
+		msg, err := cfg.Reader.ReadNextMessage(ctx)
 		if err != nil {
 			if err == io.EOF {
 				// End of file reached - flush remaining batch
 				if err := flushBatch(); err != nil {
 					return messageCount, err
 				}
-				// Update progress bar to 100%
-				bar.Set64(fileSize)
+				// Update progress reporter to 100% if provided
+				if cfg.ProgressReporter != nil && fileSize > 0 {
+					cfg.ProgressReporter.Set(fileSize)
+				}
 
 				// Check if we should loop
-				if loop {
+				if cfg.Loop {
 					// Reset to beginning of file
-					if err := reader.Reset(); err != nil {
+					if err := cfg.Reader.Reset(); err != nil {
 						return messageCount, fmt.Errorf("failed to reset file: %w", err)
 					}
 					loopIteration++
 					bytesRead = 0 // Reset bytes read counter
-					bar.Reset()
-					bar.Describe(progressBarDescription(loopIteration, loop))
+					if cfg.ProgressReporter != nil {
+						cfg.ProgressReporter.Set(0)
+					}
+					if cfg.LogWriter != nil {
+						fmt.Fprintf(cfg.LogWriter, "Looping: restarting from beginning (iteration %d)\n", loopIteration+1)
+					}
 					continue // Continue the loop to read from beginning
 				}
 
@@ -239,9 +261,9 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *MessageFil
 		messageBytesRead := TimestampSize + SizeFieldSize + int64(len(msg.Data))
 		bytesRead += messageBytesRead
 
-		// Update progress bar
-		if err := bar.Set64(bytesRead); err != nil {
-			// Ignore progress bar errors, continue replaying
+		// Update progress reporter if provided
+		if cfg.ProgressReporter != nil {
+			cfg.ProgressReporter.Set(bytesRead)
 		}
 
 		// Rate limiting - if enabled, wait before adding to batch
@@ -269,7 +291,7 @@ func Replay(ctx context.Context, producer *kafkapkg.Producer, reader *MessageFil
 		messageCount++
 
 		// Flush batch if it reaches size or byte limit
-		if len(batch) >= DefaultBatchSize || batchBytes >= DefaultBatchBytes {
+		if len(batch) >= cfg.MaxBatchSize || batchBytes >= cfg.MaxBatchBytes {
 			if err := flushBatch(); err != nil {
 				return messageCount, err
 			}

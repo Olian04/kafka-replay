@@ -314,29 +314,24 @@ docker-compose logs -f
 
 ```
 kafka-replay/
-├── cmd/
-│   └── cli/
-│       ├── main.go          # CLI entry point
-│       ├── record.go        # Record command implementation
-│       ├── replay.go        # Replay command implementation
-│       └── cat.go           # Cat command implementation
-├── pkg/
-│   ├── kafka/
-│   │   ├── consumer.go      # Kafka consumer implementation
-│   │   └── producer.go      # Kafka producer implementation
-│   ├── record.go            # Recording logic
-│   ├── replay.go            # Replay logic with batching
-│   ├── cat.go               # Message display logic
-│   └── kafka_exports.go     # Package exports
+├── cmd/                     # Entry points - contains code that relies on OS, IO, or global state
+│   └── kafka-replay/        # CLI application entry point
+├── pkg/                     # Reusable packages - pure, testable code usable as dependencies
+│   └── kafka/               # Kafka client abstractions
 ├── docker-compose.yml       # Local development environment
 ├── dockerfile               # Docker build configuration
 ├── go.mod                   # Go module definition
 ├── go.sum                   # Go module checksums
 ├── makefile                 # Build and test commands
 ├── LICENSE                  # License file
-├── .gitignore              # Git ignore rules
-└── README.md               # This file
+├── .gitignore               # Git ignore rules
+└── README.md                # This file
 ```
+
+**Directory Organization:**
+
+- **`cmd/`**: Contains entry points and different ways of compiling the program. Code in `cmd` handles OS interactions, file I/O, and global state (CLI flags, environment variables).
+- **`pkg/`**: Contains reusable packages that can be used by entry points or imported as dependencies by other projects. Code in `pkg` should be as close as possible to pure functions and testable code, avoiding direct OS/IO dependencies where possible.
 
 ### Building and Running
 

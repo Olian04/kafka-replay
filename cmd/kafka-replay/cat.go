@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/lolocompany/kafka-replay/pkg"
@@ -43,8 +44,20 @@ func catCommand() *cli.Command {
 				return string(jsonMessage)
 			}
 
+			// Open input file
+			file, err := os.Open(input)
+			if err != nil {
+				return fmt.Errorf("failed to open input file: %w", err)
+			}
+			defer file.Close()
+
 			fmt.Printf("Reading messages from: %s\n", input)
-			if err := pkg.Cat(ctx, input, formatter); err != nil {
+			if err := pkg.Cat(ctx, pkg.CatConfig{
+				Reader:       file,
+				TimeProvider: pkg.RealTimeProvider{},
+				Formatter:    formatter,
+				Output:       os.Stdout,
+			}); err != nil {
 				return err
 			}
 			return nil

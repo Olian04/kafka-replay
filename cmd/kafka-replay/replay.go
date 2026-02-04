@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/lolocompany/kafka-replay/pkg"
 	"github.com/urfave/cli/v3"
@@ -79,18 +80,37 @@ func replayCommand() *cli.Command {
 				fmt.Println("Looping: infinite")
 			}
 
-			// Create message file reader
-			reader, err := pkg.NewMessageFileReader(input, preserveTimestamps)
+			// Open input file
+			file, err := os.Open(input)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to open input file: %w", err)
 			}
-			defer reader.Close()
+			defer file.Close()
+
+			// Create message file reader
+			reader := pkg.NewMessageFileReader(file, preserveTimestamps, pkg.RealTimeProvider{})
+
+			// Get file size for progress bar
+			fileSize, err := reader.FileSize()
+			if err != nil {
+				return fmt.Errorf("failed to get file size: %w", err)
+			}
+
+			// Create progress reporter
+			progressReporter := NewReplayProgressReporter(fileSize, loop)
 
 			// Create Kafka producer
 			producer := pkg.NewProducer(brokers, topic, createTopic)
 			defer producer.Close()
 
-			messageCount, err := pkg.Replay(ctx, producer, reader, rate, loop)
+			messageCount, err := pkg.Replay(ctx, pkg.ReplayConfig{
+				Producer:        producer,
+				Reader:           reader,
+				Rate:             rate,
+				Loop:             loop,
+				LogWriter:        os.Stderr,
+				ProgressReporter: progressReporter,
+			})
 			if err != nil {
 				return err
 			}

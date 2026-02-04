@@ -37,19 +37,6 @@ func (c *Consumer) Consume(ctx context.Context, fromBeginning bool) (io.ReadClos
 	}, nil
 }
 
-// SetOffsetFromBeginning sets the offset to the beginning of the partition
-func (c *Consumer) SetOffsetFromBeginning() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	firstOffset, _, err := c.conn.ReadOffsets()
-	if err != nil {
-		return err
-	}
-	_, err = c.conn.Seek(firstOffset, kafka.SeekStart)
-	return err
-}
-
 // SetOffset sets the offset to a specific value
 func (c *Consumer) SetOffset(offset int64) error {
 	c.mu.Lock()

@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"time"
 
 	kafka "github.com/lolocompany/kafka-replay/pkg/kafka"
-	"github.com/schollz/progressbar/v3"
 )
 
 const (
@@ -18,24 +16,31 @@ const (
 	SizeFieldSize   = 8 // int64 = 8 bytes
 )
 
-func Record(ctx context.Context, consumer *kafka.Consumer, offset *int64, output io.WriteCloser, limit int) (int64, int64, error) {
+// RecordConfig holds configuration for the Record function
+type RecordConfig struct {
+	Consumer         *kafka.Consumer
+	Offset           *int64
+	Output           io.WriteCloser
+	Limit            int
+	TimeProvider     TimeProvider
+	ProgressReporter ProgressReporter
+}
+
+func Record(ctx context.Context, cfg RecordConfig) (int64, int64, error) {
 	// Set offset if specified
-	if offset != nil {
-		if err := consumer.SetOffset(*offset); err != nil {
+	if cfg.Offset != nil {
+		if err := cfg.Consumer.SetOffset(*cfg.Offset); err != nil {
 			return 0, 0, err
 		}
 	}
 
-	// Initialize progress bar
-	// If limit is 0 (unlimited), use -1 to create a spinner
-	// Otherwise, use limit as the total
-	var bar *progressbar.ProgressBar
-	if limit > 0 {
-		bar = progressbar.Default(int64(limit), "Recording messages")
-	} else {
-		bar = progressbar.Default(-1, "Recording messages")
+	// Initialize progress reporter if provided
+	if cfg.ProgressReporter != nil {
+		if cfg.Limit > 0 {
+			cfg.ProgressReporter.SetTotal(int64(cfg.Limit))
+		}
+		defer cfg.ProgressReporter.Close()
 	}
-	defer bar.Close()
 
 	var totalBytes int64
 	var messageCount int64
@@ -44,7 +49,7 @@ func Record(ctx context.Context, consumer *kafka.Consumer, offset *int64, output
 
 	for {
 		// Check if we've reached the message limit
-		if limit > 0 && messageCount >= int64(limit) {
+		if cfg.Limit > 0 && messageCount >= int64(cfg.Limit) {
 			break
 		}
 
@@ -56,7 +61,7 @@ func Record(ctx context.Context, consumer *kafka.Consumer, offset *int64, output
 		}
 
 		// Read next complete message
-		messageData, err := consumer.ReadNextMessage(ctx)
+		messageData, err := cfg.Consumer.ReadNextMessage(ctx)
 		if err != nil {
 			if err == io.EOF {
 				// End of batch, continue to read next batch
@@ -70,34 +75,34 @@ func Record(ctx context.Context, consumer *kafka.Consumer, offset *int64, output
 		}
 
 		messageSize := int64(len(messageData))
-		recordTime := time.Now().UTC()
+		recordTime := cfg.TimeProvider.Now().UTC()
 
 		// Write timestamp (fixed size: 27 bytes)
 		timestampStr := recordTime.Format(TimestampFormat)
 		copy(timestampBuf, timestampStr)
-		if _, err := output.Write(timestampBuf); err != nil {
+		if _, err := cfg.Output.Write(timestampBuf); err != nil {
 			return totalBytes, messageCount, err
 		}
 		totalBytes += TimestampSize
 
 		// Write message size (fixed size: 8 bytes, big-endian)
 		binary.BigEndian.PutUint64(sizeBuf, uint64(messageSize))
-		if _, err := output.Write(sizeBuf); err != nil {
+		if _, err := cfg.Output.Write(sizeBuf); err != nil {
 			return totalBytes, messageCount, err
 		}
 		totalBytes += SizeFieldSize
 
 		// Write message data
-		if _, err := output.Write(messageData); err != nil {
+		if _, err := cfg.Output.Write(messageData); err != nil {
 			return totalBytes, messageCount, err
 		}
 		totalBytes += messageSize
 
 		messageCount++
 
-		// Update progress bar
-		if err := bar.Add(1); err != nil {
-			// Ignore progress bar errors, continue recording
+		// Update progress reporter if provided
+		if cfg.ProgressReporter != nil {
+			cfg.ProgressReporter.Add(1)
 		}
 	}
 

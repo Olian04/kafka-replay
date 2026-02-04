@@ -97,7 +97,18 @@ func recordCommand() *cli.Command {
 				return err
 			}
 			defer writer.Close()
-			read, messageCount, err := pkg.Record(ctx, consumer, offset, writer, limit)
+
+			// Create progress reporter
+			progressReporter := NewRecordProgressReporter(limit)
+
+			read, messageCount, err := pkg.Record(ctx, pkg.RecordConfig{
+				Consumer:        consumer,
+				Offset:          offset,
+				Output:          writer,
+				Limit:           limit,
+				TimeProvider:    pkg.RealTimeProvider{},
+				ProgressReporter: progressReporter,
+			})
 			if err != nil {
 				return err
 			}
