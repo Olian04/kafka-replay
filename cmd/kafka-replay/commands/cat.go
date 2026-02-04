@@ -34,10 +34,29 @@ func CatCommand() *cli.Command {
 				Usage:   "Output only the raw message data, excluding timestamps and JSON formatting",
 				Value:   false,
 			},
+			&cli.StringFlag{
+				Name:    "find",
+				Aliases: []string{"f"},
+				Usage:   "Filter messages containing the specified byte sequence (string is converted to bytes)",
+			},
+			&cli.BoolFlag{
+				Name:    "count",
+				Aliases: []string{"c"},
+				Usage:   "Only output the count of messages, don't display them",
+				Value:   false,
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			input := cmd.String("input")
 			raw := cmd.Bool("raw")
+			findStr := cmd.String("find")
+			countOnly := cmd.Bool("count")
+
+			// Convert find string to byte slice if provided
+			var findBytes []byte
+			if findStr != "" {
+				findBytes = []byte(findStr)
+			}
 
 			// Open input file
 			file, err := os.Open(input)
@@ -46,36 +65,52 @@ func CatCommand() *cli.Command {
 			}
 			defer file.Close()
 
-			fmt.Fprintf(os.Stderr, "Reading messages from: %s\n", input)
+			if !countOnly {
+				fmt.Fprintf(os.Stderr, "Reading messages from: %s\n", input)
+			}
 
+			// Create formatter (only used if not count-only mode)
+			formatter := jsonFormatter
 			if raw {
-				// Raw mode: output only the data bytes directly
-				if err := pkg.CatRaw(ctx, file, os.Stdout); err != nil {
-					return err
-				}
-			} else {
-				// JSON mode: format as JSON with timestamp
-				formatter := func(timestamp time.Time, data []byte) string {
-					catMessage := catMessage{
-						Timestamp: timestamp.Format(time.RFC3339Nano),
-						Data:      string(data),
-					}
-					jsonMessage, err := json.Marshal(catMessage)
-					if err != nil {
-						return fmt.Sprintf("{\"error\":\"%s\"}", err.Error())
-					}
-					return string(jsonMessage)
-				}
+				formatter = rawFormatter
+			}
 
-				if err := pkg.Cat(ctx, pkg.CatConfig{
-					Reader:    file,
-					Formatter: formatter,
-					Output:    os.Stdout,
-				}); err != nil {
+			count, err := pkg.Cat(ctx, pkg.CatConfig{
+				Reader:    file,
+				Formatter: formatter,
+				Output:    os.Stdout,
+				FindBytes: findBytes,
+				CountOnly: countOnly,
+			})
+			if err != nil {
+				return err
+			}
+
+			// Output count if count-only mode
+			if countOnly {
+				_, err := fmt.Fprintf(os.Stdout, "%d\n", count)
+				if err != nil {
 					return err
 				}
 			}
+
 			return nil
 		},
 	}
+}
+
+func rawFormatter(timestamp time.Time, data []byte) []byte {
+	return data
+}
+
+func jsonFormatter(timestamp time.Time, data []byte) []byte {
+	catMessage := catMessage{
+		Timestamp: timestamp.Format(time.RFC3339Nano),
+		Data:      string(data),
+	}
+	jsonMessage, err := json.Marshal(catMessage)
+	if err != nil {
+		return []byte(fmt.Sprintf("{\"error\":\"%s\"}", err.Error()))
+	}
+	return jsonMessage
 }
