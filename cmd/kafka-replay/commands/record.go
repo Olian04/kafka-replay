@@ -64,6 +64,11 @@ func RecordCommand() *cli.Command {
 				Usage:   "Timeout for the recording operation (e.g., 5m, 30s). 0 means no timeout",
 				Value:   0,
 			},
+			&cli.StringFlag{
+				Name:    "find",
+				Aliases: []string{"f"},
+				Usage:   "Only record messages containing the specified byte sequence (string is converted to bytes). When combined with --limit, keeps consuming until the limit of matching messages is found",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			brokers, err := util.ResolveBrokers(cmd.StringSlice("broker"))
@@ -77,6 +82,13 @@ func RecordCommand() *cli.Command {
 			offsetFlag := cmd.Int64("offset")
 			limit := cmd.Int("limit")
 			timeout := cmd.Duration("timeout")
+			findStr := cmd.String("find")
+
+			// Convert find string to byte slice if provided
+			var findBytes []byte
+			if findStr != "" {
+				findBytes = []byte(findStr)
+			}
 
 			// Apply timeout if specified
 			if timeout > 0 {
@@ -107,6 +119,9 @@ func RecordCommand() *cli.Command {
 			if timeout > 0 {
 				fmt.Fprintf(os.Stderr, "Timeout: %v\n", timeout)
 			}
+			if findStr != "" {
+				fmt.Fprintf(os.Stderr, "Find filter: %s\n", findStr)
+			}
 			consumer, err := kafka.NewConsumer(ctx, brokers, topic, partition)
 			if err != nil {
 				return err
@@ -125,10 +140,11 @@ func RecordCommand() *cli.Command {
 			writer := util.CountingWriter(fileWriter, spinner)
 
 			read, messageCount, err := pkg.Record(ctx, pkg.RecordConfig{
-				Consumer: consumer,
-				Offset:   offset,
-				Output:   writer,
-				Limit:    limit,
+				Consumer:  consumer,
+				Offset:    offset,
+				Output:    writer,
+				Limit:     limit,
+				FindBytes: findBytes,
 			})
 
 			if err != nil {

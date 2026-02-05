@@ -198,7 +198,9 @@ Display recorded messages from a message file in human-readable format.
 **Options:**
 
 - `--input, -i`: Input file path containing recorded messages (required)
-- `--raw`: Output only the raw message data, excluding timestamps and JSON formatting
+- `--raw, -r`: Output only the raw message data, excluding timestamps and JSON formatting
+- `--find, -f`: Filter messages containing the specified byte sequence (string is converted to bytes)
+- `--count, -c`: Only output the count of messages, don't display them
 
 **Examples:**
 
@@ -227,6 +229,22 @@ Display raw message data only:
 ```
 
 When `--raw` is used, only the raw message bytes are written to stdout, with no timestamps or JSON formatting. This is useful for extracting message content for further processing or piping to other tools.
+
+Filter messages containing a specific string:
+
+```bash
+./kafka-replay cat --input messages.log --find "error"
+```
+
+The `--find` flag filters messages to only show those containing the specified byte sequence. The string is converted to bytes for matching.
+
+Count messages without displaying them:
+
+```bash
+./kafka-replay cat --input messages.log --count
+```
+
+The `--count` flag outputs only the total number of messages in the file, useful for quick statistics or scripting.
 
 ### File Format
 

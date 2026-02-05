@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -11,10 +12,11 @@ import (
 
 // RecordConfig holds configuration for the Record function
 type RecordConfig struct {
-	Consumer *kafka.Consumer
-	Offset   *int64
-	Output   io.WriteCloser
-	Limit    int
+	Consumer  *kafka.Consumer
+	Offset    *int64
+	Output    io.WriteCloser
+	Limit     int
+	FindBytes []byte // Optional byte sequence to search for in messages
 }
 
 func Record(ctx context.Context, cfg RecordConfig) (int64, int64, error) {
@@ -68,6 +70,13 @@ func Record(ctx context.Context, cfg RecordConfig) (int64, int64, error) {
 			return encoder.TotalBytes(), messageCount, err
 		}
 
+		// Filter by find bytes if specified
+		if cfg.FindBytes != nil && !bytes.Contains(messageData, cfg.FindBytes) {
+			// Skip this message, continue to next one
+			continue
+		}
+
+		// Write the matching message
 		if _, err := encoder.Write(timestamp, messageData); err != nil {
 			return encoder.TotalBytes(), messageCount, err
 		}
