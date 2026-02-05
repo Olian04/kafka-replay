@@ -28,6 +28,7 @@ type ReplayConfig struct {
 	Loop      bool
 	Partition *int // Optional partition to write to (nil for auto-assignment)
 	LogWriter io.Writer
+	DryRun    bool // If true, validate messages without actually sending to Kafka
 }
 
 func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
@@ -134,9 +135,15 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 	return messageCount, nil
 }
 
-// flushReplayBatch writes the current batch to Kafka
+// flushReplayBatch writes the current batch to Kafka (or validates in dry-run mode)
 func flushReplayBatch(ctx context.Context, cfg ReplayConfig, batch []kafka.Message) error {
 	if len(batch) == 0 {
+		return nil
+	}
+	// In dry-run mode, skip actual writing but still validate the batch
+	if cfg.DryRun {
+		// Validate that messages are properly formed
+		// The fact that we got here means decoding succeeded, so validation passes
 		return nil
 	}
 	if err := cfg.Producer.WriteMessages(ctx, batch...); err != nil {

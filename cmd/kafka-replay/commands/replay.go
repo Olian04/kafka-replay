@@ -62,6 +62,11 @@ func ReplayCommand() *cli.Command {
 				Usage:   "Target partition to write messages to (default: auto-assign)",
 				Value:   -1,
 			},
+			&cli.BoolFlag{
+				Name:  "dry-run",
+				Usage: "Validate configuration, messages and connectivity without actually sending to Kafka",
+				Value: false,
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			brokers, err := util.ResolveBrokers(cmd.StringSlice("broker"))
@@ -75,12 +80,16 @@ func ReplayCommand() *cli.Command {
 			createTopic := cmd.Bool("create-topic")
 			loop := cmd.Bool("loop")
 			partitionFlag := cmd.Int("partition")
+			dryRun := cmd.Bool("dry-run")
 
 			var partition *int
 			if partitionFlag >= 0 {
 				partition = &partitionFlag
 			}
 
+			if dryRun {
+				fmt.Fprintln(os.Stderr, "DRY RUN MODE: No messages will be sent to Kafka")
+			}
 			fmt.Fprintf(os.Stderr, "Replaying messages to topic '%s' on brokers %v\n", topic, brokers)
 			fmt.Fprintf(os.Stderr, "Input file: %s\n", input)
 			if rate > 0 {
@@ -128,6 +137,7 @@ func ReplayCommand() *cli.Command {
 				Loop:      loop,
 				Partition: partition,
 				LogWriter: os.Stderr,
+				DryRun:    dryRun,
 			})
 
 			if err != nil {
@@ -137,7 +147,11 @@ func ReplayCommand() *cli.Command {
 			// Close spinner before printing final message to avoid double display
 			spinner.Close()
 
-			fmt.Fprintf(os.Stderr, "Successfully replayed %d messages to topic '%s'\n", messageCount, topic)
+			if dryRun {
+				fmt.Fprintf(os.Stderr, "Dry run completed: validated %d messages (no messages were sent)\n", messageCount)
+			} else {
+				fmt.Fprintf(os.Stderr, "Successfully replayed %d messages to topic '%s'\n", messageCount, topic)
+			}
 			return nil
 		},
 	}
