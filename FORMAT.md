@@ -7,10 +7,12 @@ This document describes the binary file format (version 2) used by the Kafka Rep
 ## Overview
 
 The file format consists of:
+
 1. A fixed-size file header containing protocol metadata
 2. A series of message entries, each containing a timestamp, key size, message size, key (optional), and message data
 
 **Protocol Versions:**
+
 - **Version 1** (legacy): See [legacy/FORMAT_v1.md](legacy/FORMAT_v1.md) for details
 - **Version 2** (current): Message entries contain timestamp, key size, message size, key, and message data
 
@@ -30,10 +32,10 @@ All new files are written in version 2 format. Version 1 files are still readabl
 
 The file header is 20 bytes total and appears at the beginning of every file:
 
-| Offset | Size | Type | Description |
-|--------|------|------|-------------|
-| 0 | 4 | int32 (big-endian) | Protocol version (2) |
-| 4 | 16 | bytes | Reserved space for future use (all zeros) |
+| Offset | Size | Type               | Description                               |
+| ------ | ---- | ------------------ | ----------------------------------------- |
+| 0      | 4    | int32 (big-endian) | Protocol version (2)                      |
+| 4      | 16   | bytes              | Reserved space for future use (all zeros) |
 
 ### Protocol Version
 
@@ -47,13 +49,13 @@ The 16 bytes following the protocol version are reserved for future protocol ext
 
 Each message entry follows this structure:
 
-| Offset | Size | Type | Description |
-|--------|------|------|-------------|
-| 0 | 8 | int64 (big-endian) | Unix timestamp (seconds since epoch, UTC) |
-| 8 | 8 | int64 (big-endian) | Key size in bytes (0 if no key) |
-| 16 | 8 | int64 (big-endian) | Message data size in bytes |
-| 24 | variable | bytes | Key data (if key size > 0) |
-| 24+N | variable | bytes | Message data (raw bytes) |
+| Offset | Size     | Type               | Description                               |
+| ------ | -------- | ------------------ | ----------------------------------------- |
+| 0      | 8        | int64 (big-endian) | Unix timestamp (seconds since epoch, UTC) |
+| 8      | 8        | int64 (big-endian) | Key size in bytes (0 if no key)           |
+| 16     | 8        | int64 (big-endian) | Message data size in bytes                |
+| 24     | variable | bytes              | Key data (if key size > 0)                |
+| 24+N   | variable | bytes              | Message data (raw bytes)                  |
 
 **Note:** In version 2, if the key size is 0, no key data is written and the message data starts immediately after the message size field (at offset 24).
 
@@ -90,6 +92,7 @@ All multi-byte integers (int32, int64) are stored in **big-endian** (network byt
 ### Version 2 Example (With Key)
 
 For a message with:
+
 - Timestamp: `2024-02-02T10:15:30Z` (Unix timestamp: `1706872530`)
 - Key: `"user-123"` (8 bytes)
 - Data: `"Hello, World!"` (13 bytes)
@@ -112,6 +115,7 @@ The binary representation would be:
 ### Version 2 Example (No Key)
 
 For a message with:
+
 - Timestamp: `2024-02-02T10:15:30Z` (Unix timestamp: `1706872530`)
 - Key: `nil` (no key)
 - Data: `"Hello, World!"` (13 bytes)

@@ -7,6 +7,7 @@ This document describes the legacy binary file format (version 1) used by the Ka
 ## Overview
 
 The version 1 file format consists of:
+
 1. A fixed-size file header containing protocol metadata
 2. A series of message entries, each containing a timestamp, size, and message data (no key support)
 
@@ -24,10 +25,10 @@ The version 1 file format consists of:
 
 The file header is 20 bytes total and appears at the beginning of every file:
 
-| Offset | Size | Type | Description |
-|--------|------|------|-------------|
-| 0 | 4 | int32 (big-endian) | Protocol version (1) |
-| 4 | 16 | bytes | Reserved space for future use (all zeros) |
+| Offset | Size | Type               | Description                               |
+| ------ | ---- | ------------------ | ----------------------------------------- |
+| 0      | 4    | int32 (big-endian) | Protocol version (1)                      |
+| 4      | 16   | bytes              | Reserved space for future use (all zeros) |
 
 ### Protocol Version
 
@@ -41,11 +42,11 @@ The 16 bytes following the protocol version are reserved for future protocol ext
 
 Each message entry follows this structure:
 
-| Offset | Size | Type | Description |
-|--------|------|------|-------------|
-| 0 | 8 | int64 (big-endian) | Unix timestamp (seconds since epoch, UTC) |
-| 8 | 8 | int64 (big-endian) | Message data size in bytes |
-| 16 | variable | bytes | Message data (raw bytes) |
+| Offset | Size     | Type               | Description                               |
+| ------ | -------- | ------------------ | ----------------------------------------- |
+| 0      | 8        | int64 (big-endian) | Unix timestamp (seconds since epoch, UTC) |
+| 8      | 8        | int64 (big-endian) | Message data size in bytes                |
+| 16     | variable | bytes              | Message data (raw bytes)                  |
 
 ### Timestamp
 
@@ -70,6 +71,7 @@ All multi-byte integers (int32, int64) are stored in **big-endian** (network byt
 ## Example
 
 For a message with:
+
 - Timestamp: `2024-02-02T10:15:30Z` (Unix timestamp: `1706872530`)
 - Data: `"Hello, World!"` (13 bytes)
 - No key (version 1 doesn't support keys)

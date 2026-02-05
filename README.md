@@ -272,11 +272,13 @@ This format enables:
    git clone <repository-url>
    cd kafka-replay
    ```
+
 2. **Install dependencies:**
 
    ```bash
    go mod download
    ```
+
 3. **Build the project:**
 
    ```bash
@@ -316,6 +318,7 @@ docker-compose logs -f
    ```bash
    docker-compose up -d
    ```
+
 2. **Record messages:**
 
    ```bash
@@ -325,11 +328,13 @@ docker-compose logs -f
      --output messages.log \
      --offset 0
    ```
+
 3. **View recorded messages:**
 
    ```bash
    ./kafka-replay cat --input messages.log
    ```
+
 4. **Replay messages to a new topic:**
 
    ```bash
@@ -339,6 +344,7 @@ docker-compose logs -f
      --input messages.log \
      --rate 10
    ```
+
 5. **Verify in Redpanda Console:**
    Open `http://localhost:8080` in your browser to view the topics and messages.
 
