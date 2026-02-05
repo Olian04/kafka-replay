@@ -19,6 +19,7 @@ func main() {
 			commands.RecordCommand(),
 			commands.ReplayCommand(),
 			commands.CatCommand(),
+			commands.InfoCommand(),
 			commands.VersionCommand(),
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
