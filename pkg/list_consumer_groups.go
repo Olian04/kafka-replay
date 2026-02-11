@@ -9,7 +9,7 @@ import (
 
 // ConsumerGroupOutput represents a consumer group in the list output
 type ConsumerGroupOutput struct {
-	Group        string                   `json:"group"`
+	GroupID      string                   `json:"groupId"`
 	State        string                   `json:"state,omitempty"`
 	ProtocolType string                   `json:"protocolType,omitempty"`
 	Members      []ConsumerGroupMember    `json:"members,omitempty"`
@@ -53,13 +53,13 @@ func ListConsumerGroups(ctx context.Context, brokers []string, includeOffsets bo
 		if err != nil {
 			// If we can't describe a group, still include it but without details
 			result = append(result, ConsumerGroupOutput{
-				Group: g,
+				GroupID: g,
 			})
 			continue
 		}
 
 		output := ConsumerGroupOutput{
-			Group:        info.GroupID,
+			GroupID:      info.GroupID,
 			State:        info.State,
 			ProtocolType: info.ProtocolType,
 		}

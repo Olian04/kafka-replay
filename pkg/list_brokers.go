@@ -9,8 +9,10 @@ import (
 
 // BrokerOutput represents a broker in the list output
 type BrokerOutput struct {
+	ID        int    `json:"id"`
 	Address   string `json:"address"`
 	Reachable bool   `json:"reachable"`
+	Rack      string `json:"rack,omitempty"`
 }
 
 // ListBrokers lists all brokers with their reachability status
@@ -48,8 +50,10 @@ func ListBrokers(ctx context.Context, brokers []string) ([]BrokerOutput, error) 
 		reachable := kafka.IsBrokerReachable(ctx, brokerAddress)
 
 		output := BrokerOutput{
+			ID:        broker.ID,
 			Address:   brokerAddress,
 			Reachable: reachable,
+			// Rack not provided by current kafka.Broker; leave empty
 		}
 		result = append(result, output)
 	}

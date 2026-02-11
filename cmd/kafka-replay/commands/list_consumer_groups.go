@@ -2,27 +2,22 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
+	"github.com/lolocompany/kafka-replay/cmd/kafka-replay/util"
 	"github.com/lolocompany/kafka-replay/pkg"
+	"github.com/lolocompany/kafka-replay/cmd/kafka-replay/output"
 	"github.com/urfave/cli/v3"
 )
 
 func listConsumerGroupsCommand() *cli.Command {
 	return &cli.Command{
 		Name:        "consumer-groups",
-		Aliases:     []string{"groups"},
+		Aliases:     []string{"groups", "consumer-group"},
 		Usage:       "List consumer groups",
-		Description: "Display consumer groups as JSON objects (one per line).",
-		Flags: []cli.Flag{
-			&cli.StringSliceFlag{
-				Name:    "broker",
-				Aliases: []string{"b"},
-				Usage:   "Kafka broker address(es) (can be specified multiple times). Defaults to KAFKA_BROKERS env var if not provided.",
-				Sources: cli.EnvVars("KAFKA_BROKERS"),
-			},
+		Description: "Display consumer groups (table or json).",
+		Flags: append(util.GlobalFlags(),
 			&cli.BoolFlag{
 				Name:  "offsets",
 				Usage: "Include offset information for each partition",
@@ -34,11 +29,11 @@ func listConsumerGroupsCommand() *cli.Command {
 				Usage:   "Include member information for each group",
 				Value:   false,
 			},
-		},
+		),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			brokers := cmd.StringSlice("broker")
-			if len(brokers) == 0 {
-				return fmt.Errorf("broker address(es) must be provided via --broker flag or KAFKA_BROKERS environment variable")
+			brokers, err := util.ResolveBrokers(cmd)
+			if err != nil {
+				return err
 			}
 
 			includeOffsets := cmd.Bool("offsets")
@@ -49,14 +44,23 @@ func listConsumerGroupsCommand() *cli.Command {
 				return err
 			}
 
-			// Output one JSON object per line (compact format)
-			encoder := json.NewEncoder(os.Stdout)
-			for _, group := range groups {
-				if err := encoder.Encode(group); err != nil {
-					return fmt.Errorf("failed to encode group JSON: %w", err)
-				}
+			format, err := output.ParseFormat(util.GetFormat(cmd), output.IsTTY(os.Stdout))
+			if err != nil {
+				return err
 			}
-			return nil
+			if format == output.FormatRaw {
+				return fmt.Errorf("format 'raw' is only supported by the 'cat' command")
+			}
+			enc := output.NewEncoder(format, os.Stdout)
+			if format == output.FormatTable {
+				headers := []string{"GROUP_ID", "STATE", "PROTOCOL_TYPE"}
+				rows := make([][]string, 0, len(groups))
+				for _, g := range groups {
+					rows = append(rows, []string{g.GroupID, g.State, g.ProtocolType})
+				}
+				return enc.EncodeTable(headers, rows)
+			}
+			return output.EncodeSlice(enc, groups)
 		},
 	}
 }

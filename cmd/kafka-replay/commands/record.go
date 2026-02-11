@@ -16,13 +16,7 @@ func RecordCommand() *cli.Command {
 		Name:        "record",
 		Usage:       "Record messages from a Kafka topic",
 		Description: "Record messages from a Kafka topic and save them to a file or output location.",
-		Flags: []cli.Flag{
-			&cli.StringSliceFlag{
-				Name:     "broker",
-				Aliases:  []string{"b"},
-				Usage:    "Kafka broker address(es) (can be specified multiple times). Defaults to KAFKA_BROKERS env var if not provided.",
-				Sources:  cli.EnvVars("KAFKA_BROKERS"),
-			},
+		Flags: append(util.GlobalFlags(),
 			&cli.StringFlag{
 				Name:     "topic",
 				Aliases:  []string{"t"},
@@ -70,11 +64,11 @@ func RecordCommand() *cli.Command {
 				Aliases: []string{"f"},
 				Usage:   "Only record messages containing the specified byte sequence (string is converted to bytes). When combined with --limit, keeps consuming until the limit of matching messages is found",
 			},
-		},
+		),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			brokers := cmd.StringSlice("broker")
-			if len(brokers) == 0 {
-				return fmt.Errorf("broker address(es) must be provided via --broker flag or KAFKA_BROKERS environment variable")
+			brokers, err := util.ResolveBrokers(cmd)
+			if err != nil {
+				return err
 			}
 			topic := cmd.String("topic")
 			groupID := cmd.String("group")
@@ -112,26 +106,29 @@ func RecordCommand() *cli.Command {
 				offset = &offsetFlag
 			}
 
-			fmt.Fprintf(os.Stderr, "Recording messages from topic '%s' on brokers %v\n", topic, brokers)
-			if groupID != "" {
-				fmt.Fprintf(os.Stderr, "Consumer group: %s\n", groupID)
-			} else {
-				fmt.Fprintln(os.Stderr, "Using direct partition access (no consumer group)")
-			}
-			fmt.Fprintf(os.Stderr, "Output file: %s\n", output)
-			if offset != nil {
-				fmt.Fprintf(os.Stderr, "Starting from offset: %d\n", *offset)
-			} else {
-				fmt.Fprintln(os.Stderr, "Starting from current position")
-			}
-			if limit > 0 {
-				fmt.Fprintf(os.Stderr, "Message limit: %d\n", limit)
-			}
-			if timeout > 0 {
-				fmt.Fprintf(os.Stderr, "Timeout: %v\n", timeout)
-			}
-			if findStr != "" {
-				fmt.Fprintf(os.Stderr, "Find filter: %s\n", findStr)
+			quiet := util.Quiet(cmd)
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "Recording messages from topic '%s' on brokers %v\n", topic, brokers)
+				if groupID != "" {
+					fmt.Fprintf(os.Stderr, "Consumer group: %s\n", groupID)
+				} else {
+					fmt.Fprintln(os.Stderr, "Using direct partition access (no consumer group)")
+				}
+				fmt.Fprintf(os.Stderr, "Output file: %s\n", output)
+				if offset != nil {
+					fmt.Fprintf(os.Stderr, "Starting from offset: %d\n", *offset)
+				} else {
+					fmt.Fprintln(os.Stderr, "Starting from current position")
+				}
+				if limit > 0 {
+					fmt.Fprintf(os.Stderr, "Message limit: %d\n", limit)
+				}
+				if timeout > 0 {
+					fmt.Fprintf(os.Stderr, "Timeout: %v\n", timeout)
+				}
+				if findStr != "" {
+					fmt.Fprintf(os.Stderr, "Find filter: %s\n", findStr)
+				}
 			}
 			consumer, err := kafka.NewConsumer(ctx, brokers, topic, partition, groupID)
 			if err != nil {
@@ -144,10 +141,10 @@ func RecordCommand() *cli.Command {
 			}
 			defer fileWriter.Close()
 
-			// Create progress spinner
-			spinner := util.NewProgressSpinner("Recording messages")
-
-			// Wrap writer to count bytes for spinner
+			var spinner *util.ProgressSpinner
+			if !quiet {
+				spinner = util.NewProgressSpinner("Recording messages")
+			}
 			writer := util.CountingWriter(fileWriter, spinner)
 
 			read, messageCount, err := pkg.Record(ctx, pkg.RecordConfig{
@@ -162,10 +159,12 @@ func RecordCommand() *cli.Command {
 				return err
 			}
 
-			// Close spinner before printing final message to avoid double display
-			spinner.Close()
-
-			fmt.Fprintf(os.Stderr, "Recorded %d messages (%d bytes)\n", messageCount, read)
+			if spinner != nil {
+				spinner.Close()
+			}
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "Recorded %d messages (%d bytes)\n", messageCount, read)
+			}
 			return nil
 		},
 	}

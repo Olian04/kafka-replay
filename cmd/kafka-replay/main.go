@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-
-	"log"
+	"fmt"
 	"os"
 
 	"github.com/lolocompany/kafka-replay/cmd/kafka-replay/commands"
@@ -16,19 +15,21 @@ func main() {
 		Usage:       "A utility tool for recording and replaying Kafka messages",
 		Description: "Record messages from Kafka topics or replay previously recorded messages back to Kafka topics.",
 		Commands: []*cli.Command{
+			commands.ListCommand(),
 			commands.RecordCommand(),
 			commands.ReplayCommand(),
 			commands.CatCommand(),
-			commands.ListCommand(),
+			commands.InspectCommand(),
+			commands.DebugCommand(),
 			commands.VersionCommand(),
 		},
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			// Show help when no command is provided
+		Action: func(c context.Context, cmd *cli.Command) error {
 			return cli.ShowAppHelp(cmd)
 		},
 	}
 
 	if err := app.Run(context.Background(), os.Args); err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }

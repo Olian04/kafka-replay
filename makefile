@@ -6,6 +6,10 @@ build: clean
 test:
 	go test ./pkg/transcoder/...
 
+.PHONY: integration
+integration:
+	go test -v -run 'TestCLI' ./cmd/kafka-replay/...
+
 .PHONY: clean
 clean:
 	rm -f kafka-replay

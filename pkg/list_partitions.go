@@ -9,14 +9,14 @@ import (
 
 // PartitionOutput represents a partition in the list output
 type PartitionOutput struct {
-	Topic               string   `json:"topic"`
-	Partition           int      `json:"partitions"`
-	Leader              string   `json:"leader"`
-	ReplicatedOnBrokers []string `json:"replicatedOnBrokers,omitempty"`
-	Earliest            *int64   `json:"earliest,omitempty"`
-	Latest              *int64   `json:"latest,omitempty"`
-	Replicas            []string `json:"replicas,omitempty"`
-	InSyncReplicas      []string `json:"inSyncReplicas,omitempty"`
+	Topic          string   `json:"topic"`
+	Partition      int      `json:"partition"`
+	Leader         string   `json:"leader"`
+	Followers      []string `json:"followers,omitempty"`
+	EarliestOffset *int64   `json:"earliestOffset,omitempty"`
+	LatestOffset   *int64   `json:"latestOffset,omitempty"`
+	Replicas       []string `json:"replicas,omitempty"`
+	InSyncReplicas []string `json:"inSyncReplicas,omitempty"`
 }
 
 // ListPartitions lists all partitions with optional offsets and replicas
@@ -49,21 +49,21 @@ func ListPartitions(ctx context.Context, brokers []string, includeOffsets bool, 
 
 	result := make([]PartitionOutput, 0, len(partitions))
 	for _, partition := range partitions {
-		// Calculate replicatedOnBrokers (all replicas except the leader)
-		replicatedOnBrokers := make([]string, 0)
+		// Followers: all replicas except the leader
+		followers := make([]string, 0)
 		for _, replica := range partition.Replicas {
 			if replica.ID != partition.Leader.ID {
 				if addr, ok := brokerMap[replica.ID]; ok {
-					replicatedOnBrokers = append(replicatedOnBrokers, addr)
+					followers = append(followers, addr)
 				}
 			}
 		}
 
 		output := PartitionOutput{
-			Topic:               partition.Topic,
-			Partition:           partition.ID,
-			Leader:              partition.Leader.Address,
-			ReplicatedOnBrokers: replicatedOnBrokers,
+			Topic:     partition.Topic,
+			Partition: partition.ID,
+			Leader:    partition.Leader.Address,
+			Followers: followers,
 		}
 
 		if includeOffsets {
@@ -73,8 +73,8 @@ func ListPartitions(ctx context.Context, brokers []string, includeOffsets bool, 
 				firstOffset, lastOffset, err := leaderConn.ReadOffsets()
 				leaderConn.Close()
 				if err == nil {
-					output.Earliest = &firstOffset
-					output.Latest = &lastOffset
+					output.EarliestOffset = &firstOffset
+					output.LatestOffset = &lastOffset
 				}
 			}
 		}

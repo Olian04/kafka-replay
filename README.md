@@ -31,6 +31,28 @@ Kafka Replay provides a simple, efficient solution for these use cases with a st
 - **Context-aware**: Properly handles cancellation and cleanup
 - **Protocol versioning**: File format includes version information for future compatibility
 
+### Breaking Changes in v2
+
+If you are upgrading from v1, see [UPGRADING-v2.md](UPGRADING-v2.md) for a full migration guide. Summary:
+
+- **Global flags**: `--brokers`, `--format` (or `-f`), and `--quiet` are global and can appear before or after the command. Example: `kafka-replay --brokers localhost:9092 --format json list brokers` or `kafka-replay list brokers --brokers localhost:9092`.
+- **Output formats**: `table` (default for list/inspect), `json` (one JSON object per line), and `raw` (cat only). Use `--format json` for script-friendly output.
+- **`--broker` removed**: Use global `--brokers` (or env `KAFKA_BROKERS`). Example: v1 `list partitions --broker host:9092` → v2 `--brokers host:9092 list partitions`.
+- **JSON output field names** changed for scripts: `group` → `groupId`, `partitions` → `partition`, `replicatedOnBrokers` → `followers`, `earliest`/`latest` → `earliestOffset`/`latestOffset`. Brokers now include `id` and optional `rack`.
+- **`cat`**: Uses global `--format`. Supported: `json` (default for cat), `raw`. Stdout is data-only. Use `--quiet` with record/replay to suppress progress and status lines.
+- **Exit codes**: 0 = success, 1 = usage/config, 2 = not found, 3 = connectivity. Scripts can rely on these.
+- **New commands**: `list topics`, `inspect topic TOPIC`, `inspect consumer-group GROUP_ID`, and `debug` (unstable). Run `debug config` to see resolved config file, profile, brokers and where each value comes from.
+
+**Example — v1 vs v2 and jq:**
+
+```bash
+# v1
+kafka-replay list consumer-groups --broker localhost:9092 | jq -r '.group'
+
+# v2 (global --brokers and --format; field is now groupId)
+kafka-replay --brokers localhost:9092 --format json list consumer-groups | jq -r '.groupId'
+```
+
 ## Usage
 
 ### Prerequisites
@@ -77,25 +99,66 @@ make build
 
 This will create a `kafka-replay` binary in the project root.
 
+### Global flags
+
+These apply to all commands and can appear before or after the command name:
+
+- **`--config`**: Path to config file (see [Configuration](#configuration) for default behaviour)
+- **`--profile`**: Config profile name
+- **`--brokers`**: Broker address(es), comma-separated or repeated (or set `KAFKA_BROKERS` env)
+- **`--format`, `-f`**: Output format: `table` (default for list/inspect), `json`, or `raw` (cat only)
+- **`--quiet`**: Suppress status and progress output (record/replay)
+
+### Configuration
+
+When you don’t pass `--config`, the tool looks for a config file in this order:
+
+1. **Current directory** — `kafka-replay.yaml` in the working directory (if the file exists).
+2. **Default path** — `~/.kafka-replay/config.yaml`.
+
+The first of these that exists is used. To force a specific file, use `--config /path/to/config.yaml`. Run `kafka-replay debug config` (with optional `--config` and `--profile`) to see which config file, profile, and brokers are in effect and where each value comes from.
+
+**Config file format (YAML):**
+
+```yaml
+default_profile: local
+profiles:
+  local:
+    brokers:
+      - localhost:19092
+  prod:
+    brokers:
+      - kafka1.example.com:9092
+      - kafka2.example.com:9092
+```
+
+**Broker resolution (highest to lowest priority):**
+
+1. **`--brokers`** — Explicit flag (comma-separated or repeated).
+2. **Profile from config file** — Brokers from the selected profile (`--profile` or `default_profile` in the config).
+3. **`KAFKA_BROKERS`** — Environment variable (comma-separated).
+
+If no brokers are set by any of these, commands that need brokers will fail with a clear error.
+
 ### Commands
 
 #### Record
 
-Record messages from a Kafka topic to a binary log file.
+Record messages from a Kafka topic to a binary log file. Brokers are set globally (e.g. `--brokers` before the command).
 
 ```bash
-./kafka-replay record \
-  --broker localhost:19092 \
+./kafka-replay --brokers localhost:19092 record \
   --topic test-topic \
   --output messages.log
 ```
 
 **Options:**
 
-- `--broker, -b`: Kafka broker address(es) (required, can be specified multiple times)
+- Global `--brokers`: Kafka broker address(es) (required for record; can use `KAFKA_BROKERS` env instead)
+- Global `--quiet`: Suppress status and progress output (e.g. "Recording...", final count)
 - `--topic, -t`: Kafka topic to record messages from (required)
 - `--partition, -p`: Kafka partition to record from (default: 0)
-- `--group-id, -g`: Consumer group ID (default: "kafka-replay-record")
+- `--group, -g`: Consumer group ID (optional; empty = direct partition access)
 - `--output, -o`: Output file path (default: "messages.log")
 - `--offset, -O`: Start reading from a specific offset (-1 to use current position, 0 to start from beginning, default: -1)
 - `--limit, -l`: Maximum number of messages to record (0 for unlimited, default: 0)
@@ -105,8 +168,7 @@ Record messages from a Kafka topic to a binary log file.
 Record all messages from the beginning of a topic:
 
 ```bash
-./kafka-replay record \
-  --broker localhost:19092 \
+./kafka-replay --brokers localhost:19092 record \
   --topic my-topic \
   --offset 0 \
   --output backup.log
@@ -115,8 +177,7 @@ Record all messages from the beginning of a topic:
 Record a limited number of messages:
 
 ```bash
-./kafka-replay record \
-  --broker localhost:19092 \
+./kafka-replay --brokers localhost:19092 record \
   --topic my-topic \
   --output messages.log \
   --limit 100
@@ -125,8 +186,7 @@ Record a limited number of messages:
 Record 50 messages from the beginning:
 
 ```bash
-./kafka-replay record \
-  --broker localhost:19092 \
+./kafka-replay --brokers localhost:19092 record \
   --topic my-topic \
   --offset 0 \
   --output messages.log \
@@ -136,10 +196,7 @@ Record 50 messages from the beginning:
 Record from multiple brokers:
 
 ```bash
-./kafka-replay record \
-  --broker broker1:9092 \
-  --broker broker2:9092 \
-  --broker broker3:9092 \
+./kafka-replay --brokers broker1:9092,broker2:9092,broker3:9092 record \
   --topic my-topic \
   --output messages.log
 ```
@@ -149,18 +206,18 @@ Record from multiple brokers:
 Replay recorded messages from a log file back to a Kafka topic.
 
 ```bash
-./kafka-replay replay \
-  --broker localhost:19092 \
+./kafka-replay --brokers localhost:19092 replay \
   --topic new-topic \
   --input messages.log
 ```
 
 **Options:**
 
-- `--broker, -b`: Kafka broker address(es) (required, can be specified multiple times)
+- Global `--brokers`: Kafka broker address(es) (required for replay)
+- Global `--quiet`: Suppress status and progress output (e.g. "Replaying...", final count)
 - `--topic, -t`: Kafka topic to replay messages to (required)
 - `--input, -i`: Input file path containing recorded messages (required)
-- `--rate, -r`: Messages per second to replay (0 for maximum speed, default: 0)
+- `--rate`: Messages per second to replay (0 for maximum speed, default: 0)
 - `--preserve-timestamps`: Preserve original message timestamps (default: false)
 - `--create-topic`: Create the topic if it doesn't exist (default: false)
 - `--loop`: Enable infinite looping - replay messages continuously until interrupted (default: false)
@@ -170,8 +227,7 @@ Replay recorded messages from a log file back to a Kafka topic.
 Replay messages at a controlled rate:
 
 ```bash
-./kafka-replay replay \
-  --broker localhost:19092 \
+./kafka-replay --brokers localhost:19092 replay \
   --topic test-topic \
   --input messages.log \
   --rate 100
@@ -180,8 +236,7 @@ Replay messages at a controlled rate:
 Replay with original timestamps preserved:
 
 ```bash
-./kafka-replay replay \
-  --broker localhost:19092 \
+./kafka-replay --brokers localhost:19092 replay \
   --topic test-topic \
   --input messages.log \
   --preserve-timestamps
@@ -189,7 +244,7 @@ Replay with original timestamps preserved:
 
 #### Cat
 
-Display recorded messages from a message file in human-readable format.
+Display recorded messages from a message file. Stdout is data-only (no progress messages).
 
 ```bash
 ./kafka-replay cat --input messages.log
@@ -197,10 +252,10 @@ Display recorded messages from a message file in human-readable format.
 
 **Options:**
 
+- Global `--format` (or `-f`): Output format for cat: `json` (default), or `raw`.
 - `--input, -i`: Input file path containing recorded messages (required)
-- `--raw, -r`: Output only the raw message data, excluding timestamps and JSON formatting
-- `--find, -f`: Filter messages containing the specified byte sequence (string is converted to bytes)
-- `--count, -c`: Only output the count of messages, don't display them
+- `--find, -f`: Filter messages containing the specified literal byte sequence (case-sensitive)
+- `--count`: Only output the count of messages to stdout, don't display them
 
 **Examples:**
 
@@ -217,18 +272,19 @@ Output format: Each message is displayed as a JSON object on a single line:
 {"timestamp":"2026-02-02T10:15:31.234567890Z","data":"{\"message\":\"another\"}"}
 ```
 
-The JSON output format includes:
+The default JSON output (one object per line) includes per line:
 
-- `timestamp`: ISO 8601 timestamp (RFC3339Nano format) when the message was recorded
-- `data`: The message content as a string
+- `timestamp`: ISO 8601 (RFC3339Nano) when the message was recorded
+- `key`: Message key as string
+- `data`: Message content as string
 
 Display raw message data only:
 
 ```bash
-./kafka-replay cat --input messages.log --raw
+./kafka-replay cat --input messages.log --format raw
 ```
 
-When `--raw` is used, only the raw message bytes are written to stdout, with no timestamps or JSON formatting. This is useful for extracting message content for further processing or piping to other tools.
+When `--format raw` is used, only the raw message bytes are written to stdout.
 
 Filter messages containing a specific string:
 
@@ -322,8 +378,7 @@ docker-compose logs -f
 2. **Record messages:**
 
    ```bash
-   ./kafka-replay record \
-     --broker localhost:19092 \
+   ./kafka-replay --brokers localhost:19092 record \
      --topic test-topic \
      --output messages.log \
      --offset 0
@@ -338,8 +393,7 @@ docker-compose logs -f
 4. **Replay messages to a new topic:**
 
    ```bash
-   ./kafka-replay replay \
-     --broker localhost:19092 \
+   ./kafka-replay --brokers localhost:19092 replay \
      --topic replayed-topic \
      --input messages.log \
      --rate 10

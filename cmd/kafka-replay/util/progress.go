@@ -33,11 +33,14 @@ func NewProgressSpinner(description string) *ProgressSpinner {
 	}
 }
 
-// CountingWriter wraps a writer to count bytes for the spinner
+// CountingWriter wraps a writer to count bytes for the spinner.
+// If spinner is nil, the writer is returned unchanged (no counting).
 func CountingWriter(writer io.Writer, spinner *ProgressSpinner) io.WriteCloser {
+	if spinner == nil {
+		return &writeCloser{Writer: writer, closer: writer}
+	}
 	counter := &byteCounter{spinner: spinner}
 	multiWriter := io.MultiWriter(writer, counter)
-
 	return &writeCloser{
 		Writer: multiWriter,
 		closer: writer,
@@ -65,13 +68,16 @@ func (wc *writeCloser) Close() error {
 	return nil
 }
 
-// CountingReadSeeker wraps a ReadSeeker to count bytes for the spinner
+// CountingReadSeeker wraps a ReadSeeker to count bytes for the spinner.
+// If spinner is nil, the seeker is returned unchanged (no counting).
 // We need a wrapper struct because io.TeeReader only returns io.Reader, not io.ReadSeeker.
 // When Seek is called, we recreate the TeeReader to read from the new position.
 func CountingReadSeeker(seeker io.ReadSeeker, spinner *ProgressSpinner) io.ReadSeeker {
+	if spinner == nil {
+		return seeker
+	}
 	counter := &byteCounter{spinner: spinner}
 	teeReader := io.TeeReader(seeker, counter)
-
 	return &readSeeker{
 		reader:  teeReader,
 		seeker:  seeker,
