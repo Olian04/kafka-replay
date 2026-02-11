@@ -66,7 +66,7 @@ kafka-replay --brokers localhost:9092 --format json list consumer-groups | jq -r
 #### Install using go install (Recommended)
 
 ```bash
-go install github.com/lolocompany/kafka-replay/cmd/kafka-replay@latest
+go install github.com/lolocompany/kafka-replay/v2/cmd/kafka-replay@latest
 ```
 
 This will install the `kafka-replay` binary to `$GOPATH/bin` (or `$HOME/go/bin` if `GOPATH` is not set). Make sure this directory is in your `PATH`.
