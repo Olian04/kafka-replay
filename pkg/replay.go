@@ -172,19 +172,19 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 			}
 
 			if err == io.EOF {
-				// End of file reached - flush remaining batch
-				if err := flushBatch(); err != nil {
-					return messageCount, err
-				}
-
-				// Check if we should loop
+				// End of file reached
 				if cfg.Loop {
+					// In loop mode: reset and continue without flushing.
+					// This allows batches to accumulate across loop iterations for better throughput.
 					if err := cfg.Decoder.Reset(); err != nil {
 						return messageCount, err
 					}
 					continue
 				}
-				// No more looping, exit
+				// Not looping: flush remaining batch and exit
+				if err := flushBatch(); err != nil {
+					return messageCount, err
+				}
 				break
 			}
 			// Check if context was canceled
