@@ -158,8 +158,8 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 
 		// Read next complete message into per-message pooled buffers.
 		// DecodeReader is no-grow: if these buffers are too small, it returns ErrBufferTooSmall.
-		keyBuf := getKeySlice(0)
-		dataBuf := getValueSlice(0)
+		keyBuf := getKeySlice()
+		dataBuf := getValueSlice()
 
 		timestamp, keyLen, dataLen, err := cfg.Decoder.Read(keyBuf, dataBuf)
 		if err != nil {
@@ -181,10 +181,7 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 					}
 					continue
 				}
-				// Not looping: flush remaining batch and exit
-				if err := flushBatch(); err != nil {
-					return messageCount, err
-				}
+				// No more looping, exit
 				break
 			}
 			// Check if context was canceled
@@ -254,22 +251,14 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 	return messageCount, nil
 }
 
-// getKeySlice returns a key buffer slice with length minLen.
-func getKeySlice(minLen int) []byte {
-	buf := keyBufPool.Get().([]byte)
-	if cap(buf) < minLen {
-		buf = make([]byte, minLen, max(minLen*2, keyPoolDefaultCapBytes))
-	}
-	return buf
+// getKeySlice returns a key buffer slice from the pool.
+func getKeySlice() []byte {
+	return keyBufPool.Get().([]byte)
 }
 
-// getValueSlice returns a value buffer slice with length minLen.
-func getValueSlice(minLen int) []byte {
-	buf := valueBufPool.Get().([]byte)
-	if cap(buf) < minLen {
-		buf = make([]byte, minLen, max(minLen*2, valuePoolDefaultCapBytes))
-	}
-	return buf
+// getValueSlice returns a value buffer slice from the pool.
+func getValueSlice() []byte {
+	return valueBufPool.Get().([]byte)
 }
 
 func returnKeySlice(key []byte) {
