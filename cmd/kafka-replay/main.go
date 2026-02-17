@@ -18,6 +18,7 @@ func main() {
 			commands.ListCommand(),
 			commands.RecordCommand(),
 			commands.ReplayCommand(),
+			commands.MirrorCommand(),
 			commands.CatCommand(),
 			commands.InspectCommand(),
 			commands.DebugCommand(),
