@@ -164,12 +164,8 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 		timestamp, keyLen, dataLen, err := cfg.Decoder.Read(keyBuf, dataBuf)
 		if err != nil {
 			// We won't be using these buffers
-			if keyBuf != nil {
-				returnKeySlice(keyBuf)
-			}
-			if dataBuf != nil {
-				returnValueSlice(dataBuf)
-			}
+			returnKeySlice(keyBuf)
+			returnValueSlice(dataBuf)
 
 			if err == io.EOF {
 				// End of file reached
@@ -199,9 +195,7 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 			keyBuf = keyBuf[:keyLen]
 		} else {
 			// Return unused key buffer immediately
-			if keyBuf != nil {
-				returnKeySlice(keyBuf)
-			}
+			returnKeySlice(keyBuf)
 			keyBuf = nil
 		}
 		dataBuf = dataBuf[:dataLen]
@@ -209,12 +203,8 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 		// Filter by find bytes if specified
 		if cfg.FindBytes != nil && !bytes.Contains(dataBuf, cfg.FindBytes) {
 			// Return buffers for skipped message
-			if keyBuf != nil {
-				returnKeySlice(keyBuf)
-			}
-			if dataBuf != nil {
-				returnValueSlice(dataBuf)
-			}
+			returnKeySlice(keyBuf)
+			returnValueSlice(dataBuf)
 			continue
 		}
 
