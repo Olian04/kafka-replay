@@ -86,14 +86,114 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 		cfg.LogWriter = os.Stderr
 	}
 
-	// Rate limiting setup - track messages sent and time for steady rate
+	// Channel to pass messages from reader to writer goroutine
+	// Buffered to allow some pipelining while maintaining backpressure
+	msgChan := make(chan kafka.Message, BatchSize)
+	
+	// Channel to signal completion and pass errors
+	errChan := make(chan error, 1)
+
+	// Reader goroutine: reads from decoder and sends messages to channel
+	go func() {
+		defer close(msgChan)
+		
+		for {
+			// Check context cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			// Read next complete message into per-message pooled buffers.
+			// DecodeReader is no-grow: if these buffers are too small, it returns ErrBufferTooSmall.
+			keyBuf := getKeySlice()
+			dataBuf := getValueSlice()
+
+			timestamp, keyLen, dataLen, err := cfg.Decoder.Read(keyBuf, dataBuf)
+			if err != nil {
+				// We won't be using these buffers
+				returnKeySlice(keyBuf)
+				returnValueSlice(dataBuf)
+
+				if err == io.EOF {
+					// End of file reached
+					if cfg.Loop {
+						// In loop mode: reset and continue without flushing.
+						// This allows batches to accumulate across loop iterations for better throughput.
+						if err := cfg.Decoder.Reset(); err != nil {
+							select {
+							case errChan <- err:
+							case <-ctx.Done():
+							}
+							return
+						}
+						continue
+					}
+					// No more looping, exit normally
+					return
+				}
+				// Check if context was canceled
+				if ctx.Err() != nil {
+					return
+				}
+				// Other error - send to error channel
+				select {
+				case errChan <- err:
+				case <-ctx.Done():
+				}
+				return
+			}
+
+			// Limit buffers to the valid decoded lengths
+			if keyLen > 0 {
+				keyBuf = keyBuf[:keyLen]
+			} else {
+				// Return unused key buffer immediately
+				returnKeySlice(keyBuf)
+				keyBuf = nil
+			}
+			dataBuf = dataBuf[:dataLen]
+
+			// Filter by find bytes if specified
+			if cfg.FindBytes != nil && !bytes.Contains(dataBuf, cfg.FindBytes) {
+				// Return buffers for skipped message
+				returnKeySlice(keyBuf)
+				returnValueSlice(dataBuf)
+				continue
+			}
+
+			// Build Kafka message with pooled buffers (returned to pool after flush)
+			kafkaMsg := kafka.Message{
+				Key:   keyBuf,
+				Value: dataBuf,
+				Time:  timestamp,
+			}
+			// Set partition if specified in config (nil means auto-assignment)
+			if cfg.Partition != nil {
+				kafkaMsg.Partition = *cfg.Partition
+			}
+
+			// Send message to writer goroutine
+			select {
+			case msgChan <- kafkaMsg:
+				// Message sent successfully
+			case <-ctx.Done():
+				// Context canceled, return buffers and exit
+				returnKeySlice(keyBuf)
+				returnValueSlice(dataBuf)
+				return
+			}
+		}
+	}()
+
+	// Writer goroutine: receives messages, batches them, and writes to Kafka
 	var messagesSent int64
 	var rateStartTime time.Time
 	if cfg.Rate > 0 {
 		rateStartTime = time.Now()
 	}
 
-	var messageCount int64
 	batch := make([]kafka.Message, 0, BatchSize)
 	var batchBytes int64
 
@@ -145,100 +245,57 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 		return nil
 	}
 
+	// Receive messages from reader goroutine and batch them
 	for {
-		// Check context cancellation
 		select {
 		case <-ctx.Done():
+			// Flush any pending batch before returning
 			if err := flushBatch(); err != nil {
-				return messageCount, err
+				return messagesSent, err
 			}
-			return messageCount, ctx.Err()
-		default:
-		}
-
-		// Read next complete message into per-message pooled buffers.
-		// DecodeReader is no-grow: if these buffers are too small, it returns ErrBufferTooSmall.
-		keyBuf := getKeySlice()
-		dataBuf := getValueSlice()
-
-		timestamp, keyLen, dataLen, err := cfg.Decoder.Read(keyBuf, dataBuf)
-		if err != nil {
-			// We won't be using these buffers
-			returnKeySlice(keyBuf)
-			returnValueSlice(dataBuf)
-
-			if err == io.EOF {
-				// End of file reached
-				if cfg.Loop {
-					// In loop mode: reset and continue without flushing.
-					// This allows batches to accumulate across loop iterations for better throughput.
-					if err := cfg.Decoder.Reset(); err != nil {
-						return messageCount, err
+			return messagesSent, ctx.Err()
+		case err := <-errChan:
+			// Error from reader goroutine
+			if flushErr := flushBatch(); flushErr != nil {
+				return messagesSent, flushErr
+			}
+			return messagesSent, err
+		case msg, ok := <-msgChan:
+			if !ok {
+				// Channel closed, reader finished
+				// Check for any error from reader goroutine
+				select {
+				case err := <-errChan:
+					if err != nil {
+						// Error occurred, flush batch and return error
+						if flushErr := flushBatch(); flushErr != nil {
+							return messagesSent, flushErr
+						}
+						return messagesSent, err
 					}
-					continue
+				default:
+					// No error, proceed normally
 				}
-				// No more looping, exit
-				break
-			}
-			// Check if context was canceled
-			if ctx.Err() != nil {
+				// Flush any remaining messages
 				if err := flushBatch(); err != nil {
-					return messageCount, err
+					return messagesSent, err
 				}
-				return messageCount, ctx.Err()
+				return messagesSent, nil
 			}
-			return messageCount, err
-		}
 
-		// Limit buffers to the valid decoded lengths
-		if keyLen > 0 {
-			keyBuf = keyBuf[:keyLen]
-		} else {
-			// Return unused key buffer immediately
-			returnKeySlice(keyBuf)
-			keyBuf = nil
-		}
-		dataBuf = dataBuf[:dataLen]
+			// Add message to batch
+			batch = append(batch, msg)
+			batchBytes += int64(len(msg.Value))
 
-		// Filter by find bytes if specified
-		if cfg.FindBytes != nil && !bytes.Contains(dataBuf, cfg.FindBytes) {
-			// Return buffers for skipped message
-			returnKeySlice(keyBuf)
-			returnValueSlice(dataBuf)
-			continue
-		}
-
-		// Build Kafka message with pooled buffers (returned to pool after flush)
-		kafkaMsg := kafka.Message{
-			Key:   keyBuf,
-			Value: dataBuf,
-			Time:  timestamp,
-		}
-		// Set partition if specified in config (nil means auto-assignment)
-		if cfg.Partition != nil {
-			kafkaMsg.Partition = *cfg.Partition
-		}
-
-		// Add to batch
-		batch = append(batch, kafkaMsg)
-		batchBytes += int64(dataLen)
-		messageCount++
-
-		// Flush batch if it reaches size or byte limit
-		// The kafka-go Writer will further batch these internally for optimal throughput
-		if len(batch) >= BatchSize || batchBytes >= BatchBytes {
-			if err := flushBatch(); err != nil {
-				return messageCount, err
+			// Flush batch if it reaches size or byte limit
+			// The kafka-go Writer will further batch these internally for optimal throughput
+			if len(batch) >= BatchSize || batchBytes >= BatchBytes {
+				if err := flushBatch(); err != nil {
+					return messagesSent, err
+				}
 			}
 		}
 	}
-
-	// Flush any remaining messages
-	if err := flushBatch(); err != nil {
-		return messageCount, err
-	}
-
-	return messageCount, nil
 }
 
 // getKeySlice returns a key buffer slice from the pool.
