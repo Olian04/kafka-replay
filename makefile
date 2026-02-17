@@ -17,16 +17,16 @@ clean:
 .PHONY: record
 record:
 	./kafka-replay record \
-		--broker=redpanda:9092 \
+		--brokers=redpanda:9092 \
 		--topic=test-topic \
-		--group-id=test-consumer-group \
+		--group=test-consumer-group \
 		--output=messages.log \
 		--limit=1000
 
 .PHONY: replay
 replay:
 	./kafka-replay replay \
-		--broker=redpanda:9092 \
+		--brokers=redpanda:9092 \
 		--topic=new-topic \
 		--input=messages.log \
 		--create-topic
