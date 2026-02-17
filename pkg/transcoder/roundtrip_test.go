@@ -44,23 +44,24 @@ func TestEncodeThenDecode(t *testing.T) {
 		t.Fatalf("NewDecodeReader failed: %v", err)
 	}
 
+	var key, data []byte
 	for i, expectedMsg := range messages {
-		entry, err := decoder.Read()
+		timestamp, _, _, err := readNoGrow(t, decoder, &key, &data)
 		if err != nil {
 			t.Fatalf("Read %d failed: %v", i, err)
 		}
 
-		if !entry.Timestamp.Equal(expectedMsg.timestamp) {
-			t.Errorf("Message %d timestamp mismatch: expected %v, got %v", i, expectedMsg.timestamp, entry.Timestamp)
+		if !timestamp.Equal(expectedMsg.timestamp) {
+			t.Errorf("Message %d timestamp mismatch: expected %v, got %v", i, expectedMsg.timestamp, timestamp)
 		}
 
-		if !bytes.Equal(entry.Data, expectedMsg.data) {
-			t.Errorf("Message %d data mismatch: expected %q, got %q", i, expectedMsg.data, entry.Data)
+		if !bytes.Equal(data, expectedMsg.data) {
+			t.Errorf("Message %d data mismatch: expected %q, got %q", i, expectedMsg.data, data)
 		}
 	}
 
 	// Should return EOF
-	_, err = decoder.Read()
+	_, _, _, err = readNoGrow(t, decoder, &key, &data)
 	if err != io.EOF {
 		t.Errorf("Expected EOF, got %v", err)
 	}
@@ -108,19 +109,20 @@ func TestDecodeThenEncode(t *testing.T) {
 		data      []byte
 	}{}
 
+	var key, data []byte
 	for {
-		entry, err := decoder.Read()
+		timestamp, _, _, err := readNoGrow(t, decoder, &key, &data)
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			t.Fatalf("Read failed: %v", err)
 		}
+		dataCopy := append([]byte(nil), data...)
 		decodedMessages = append(decodedMessages, struct {
 			timestamp time.Time
 			data      []byte
-		}{entry.Timestamp, entry.Data})
-		// Note: key is discarded in this test
+		}{timestamp, dataCopy})
 	}
 	decoder.Close()
 
@@ -156,17 +158,17 @@ func TestDecodeThenEncode(t *testing.T) {
 	}
 
 	for i, expectedMsg := range originalMessages {
-		entry, err := newDecoder.Read()
+		timestamp, _, _, err := readNoGrow(t, newDecoder, &key, &data)
 		if err != nil {
 			t.Fatalf("Read %d failed: %v", i, err)
 		}
 
-		if !entry.Timestamp.Equal(expectedMsg.timestamp) {
-			t.Errorf("Message %d timestamp mismatch: expected %v, got %v", i, expectedMsg.timestamp, entry.Timestamp)
+		if !timestamp.Equal(expectedMsg.timestamp) {
+			t.Errorf("Message %d timestamp mismatch: expected %v, got %v", i, expectedMsg.timestamp, timestamp)
 		}
 
-		if !bytes.Equal(entry.Data, expectedMsg.data) {
-			t.Errorf("Message %d data mismatch: expected %q, got %q", i, expectedMsg.data, entry.Data)
+		if !bytes.Equal(data, expectedMsg.data) {
+			t.Errorf("Message %d data mismatch: expected %q, got %q", i, expectedMsg.data, data)
 		}
 	}
 
@@ -209,22 +211,23 @@ func TestRoundTripMultipleSequences(t *testing.T) {
 			t.Fatalf("Cycle %d: NewDecodeReader failed: %v", cycle, err)
 		}
 
+		var key, data []byte
 		for i, expectedMsg := range messages {
-			entry, err := decoder.Read()
+			timestamp, _, _, err := readNoGrow(t, decoder, &key, &data)
 			if err != nil {
 				t.Fatalf("Cycle %d: Read %d failed: %v", cycle, i, err)
 			}
 
-			if !entry.Timestamp.Equal(expectedMsg.timestamp) {
-				t.Errorf("Cycle %d: Message %d timestamp mismatch: expected %v, got %v", cycle, i, expectedMsg.timestamp, entry.Timestamp)
+			if !timestamp.Equal(expectedMsg.timestamp) {
+				t.Errorf("Cycle %d: Message %d timestamp mismatch: expected %v, got %v", cycle, i, expectedMsg.timestamp, timestamp)
 			}
 
-			if !bytes.Equal(entry.Data, expectedMsg.data) {
-				t.Errorf("Cycle %d: Message %d data mismatch: expected %q, got %q", cycle, i, expectedMsg.data, entry.Data)
+			if !bytes.Equal(data, expectedMsg.data) {
+				t.Errorf("Cycle %d: Message %d data mismatch: expected %q, got %q", cycle, i, expectedMsg.data, data)
 			}
 		}
 
-		_, err = decoder.Read()
+		_, _, _, err = readNoGrow(t, decoder, &key, &data)
 		if err != io.EOF {
 			t.Errorf("Cycle %d: Expected EOF, got %v", cycle, err)
 		}
@@ -260,21 +263,22 @@ func TestRoundTripEmptyMessage(t *testing.T) {
 		t.Fatalf("NewDecodeReader failed: %v", err)
 	}
 
-	entry, err := decoder.Read()
+	var key, data []byte
+	timestamp, keyLen, dataLen, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if !entry.Timestamp.Equal(testTime) {
-		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, entry.Timestamp)
+	if !timestamp.Equal(testTime) {
+		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, timestamp)
 	}
 
-	if len(entry.Key) > 0 {
-		t.Errorf("Expected nil key, got %q", entry.Key)
+	if keyLen != 0 || len(key) > 0 {
+		t.Errorf("Expected nil key, got keyLen=%d key=%q", keyLen, key)
 	}
 
-	if len(entry.Data) != 0 {
-		t.Errorf("Expected empty data, got %q", entry.Data)
+	if dataLen != 0 || len(data) != 0 {
+		t.Errorf("Expected empty data, got dataLen=%d data=%q", dataLen, data)
 	}
 
 	decoder.Close()
@@ -309,24 +313,25 @@ func TestRoundTripLargeMessage(t *testing.T) {
 		t.Fatalf("NewDecodeReader failed: %v", err)
 	}
 
-	entry, err := decoder.Read()
+	var key, data []byte
+	timestamp, keyLen, dataLen, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if !entry.Timestamp.Equal(testTime) {
-		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, entry.Timestamp)
+	if !timestamp.Equal(testTime) {
+		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, timestamp)
 	}
 
-	if len(entry.Key) > 0 {
-		t.Errorf("Expected nil key, got %q", entry.Key)
+	if keyLen != 0 || len(key) > 0 {
+		t.Errorf("Expected nil key, got keyLen=%d key=%q", keyLen, key)
 	}
 
-	if len(entry.Data) != len(largeData) {
-		t.Errorf("Data length mismatch: expected %d, got %d", len(largeData), len(entry.Data))
+	if dataLen != len(largeData) || len(data) != len(largeData) {
+		t.Errorf("Data length mismatch: expected %d, got dataLen=%d len(data)=%d", len(largeData), dataLen, len(data))
 	}
 
-	if !bytes.Equal(entry.Data, largeData) {
+	if !bytes.Equal(data, largeData) {
 		t.Error("Data content mismatch")
 	}
 

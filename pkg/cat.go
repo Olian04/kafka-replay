@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/lolocompany/kafka-replay/v2/pkg/transcoder"
@@ -30,6 +32,22 @@ func Cat(ctx context.Context, cfg CatConfig) (int, error) {
 	defer decoder.Close()
 
 	count := 0
+	// Preallocate buffers for no-grow decoder reads.
+	// If messages exceed these sizes, Cat will return ErrBufferTooSmall.
+	keyCap := 4 * 1024
+	if v := os.Getenv(EnvKeyPoolBufBytes); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			keyCap = n
+		}
+	}
+	dataCap := 64 * 1024
+	if v := os.Getenv(EnvValuePoolBufBytes); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			dataCap = n
+		}
+	}
+	keyStorage := make([]byte, keyCap)
+	dataStorage := make([]byte, dataCap)
 
 	for {
 		// Check context cancellation
@@ -40,7 +58,7 @@ func Cat(ctx context.Context, cfg CatConfig) (int, error) {
 		}
 
 		// Read next complete message
-		entry, err := decoder.Read()
+		timestamp, keyLen, dataLen, err := decoder.Read(keyStorage, dataStorage)
 		if err != nil {
 			if err == io.EOF {
 				// End of file reached
@@ -49,8 +67,17 @@ func Cat(ctx context.Context, cfg CatConfig) (int, error) {
 			return count, err
 		}
 
+		// Limit buffers to the valid decoded lengths
+		var keyBuf []byte
+		if keyLen > 0 {
+			keyBuf = keyStorage[:keyLen]
+		} else {
+			keyBuf = nil
+		}
+		dataBuf := dataStorage[:dataLen]
+
 		// Filter by find bytes if specified
-		if cfg.FindBytes != nil && !bytes.Contains(entry.Data, cfg.FindBytes) {
+		if cfg.FindBytes != nil && !bytes.Contains(dataBuf, cfg.FindBytes) {
 			continue
 		}
 
@@ -63,8 +90,7 @@ func Cat(ctx context.Context, cfg CatConfig) (int, error) {
 		}
 
 		// Display message
-		// Note: key is read but not currently used in cat output
-		formattedMessage := cfg.Formatter(entry.Timestamp, entry.Key, entry.Data)
+		formattedMessage := cfg.Formatter(timestamp, keyBuf, dataBuf)
 		if _, err := cfg.Output.Write(formattedMessage); err != nil {
 			return count, err
 		}

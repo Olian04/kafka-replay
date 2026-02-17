@@ -7,12 +7,52 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	kafkapkg "github.com/lolocompany/kafka-replay/v2/pkg/kafka"
 	"github.com/lolocompany/kafka-replay/v2/pkg/transcoder"
 	"github.com/segmentio/kafka-go"
 )
+
+const (
+	// EnvKeyPoolBufBytes configures the default capacity of buffers in the key pool.
+	EnvKeyPoolBufBytes = "KAFKA_REPLAY_KEY_POOL_BUFFER_BYTES"
+	// EnvValuePoolBufBytes configures the default capacity of buffers in the value pool.
+	EnvValuePoolBufBytes = "KAFKA_REPLAY_VALUE_POOL_BUFFER_BYTES"
+)
+
+func envPoolCapBytes(name string, def int) int {
+	v, ok := os.LookupEnv(name)
+	if !ok || v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+var (
+	keyPoolDefaultCapBytes   = envPoolCapBytes(EnvKeyPoolBufBytes, 4*1024)    // 4KB
+	valuePoolDefaultCapBytes = envPoolCapBytes(EnvValuePoolBufBytes, 64*1024) // 64KB
+)
+
+// keyBufPool holds []byte buffers for Kafka message keys.
+var keyBufPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, keyPoolDefaultCapBytes)
+	},
+}
+
+// valueBufPool holds []byte buffers for Kafka message values.
+var valueBufPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, valuePoolDefaultCapBytes)
+	},
+}
 
 const (
 	// BatchSize is the number of messages to batch before writing to Kafka
@@ -66,10 +106,10 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 		if cfg.Rate > 0 {
 			batchSize := int64(len(batch))
 			elapsed := time.Since(rateStartTime)
-			
+
 			// Calculate how many messages we should have sent by now
 			expectedMessages := int64(float64(cfg.Rate) * elapsed.Seconds())
-			
+
 			// If we're about to exceed the rate, wait
 			if messagesSent+batchSize > expectedMessages {
 				// Calculate how long to wait
@@ -77,7 +117,7 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 				// So: waitTime >= (messagesSent + batchSize) / rate - elapsed
 				requiredTime := time.Duration(float64(messagesSent+batchSize) / float64(cfg.Rate) * float64(time.Second))
 				waitTime := requiredTime - elapsed
-				
+
 				if waitTime > 0 {
 					select {
 					case <-ctx.Done():
@@ -91,17 +131,14 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 			}
 		}
 
-		if cfg.DryRun {
-			// In dry-run mode, skip actual writing but still validate
-			// The fact that we got here means decoding succeeded, so validation passes
-			messagesSent += int64(len(batch))
-			batch = batch[:0]
-			batchBytes = 0
-			return nil
+		// In dry-run mode, skip actual writing but still validate
+		// The fact that we got here means decoding succeeded, so validation passes
+		if !cfg.DryRun {
+			if err := cfg.Producer.WriteMessages(ctx, batch...); err != nil {
+				return fmt.Errorf("failed to write batch to Kafka: %w", err)
+			}
 		}
-		if err := cfg.Producer.WriteMessages(ctx, batch...); err != nil {
-			return fmt.Errorf("failed to write batch to Kafka: %w", err)
-		}
+		returnBatchBuffersToPool(batch)
 		messagesSent += int64(len(batch))
 		batch = batch[:0]
 		batchBytes = 0
@@ -119,9 +156,21 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 		default:
 		}
 
-		// Read next complete message
-		entry, err := cfg.Decoder.Read()
+		// Read next complete message into per-message pooled buffers.
+		// DecodeReader is no-grow: if these buffers are too small, it returns ErrBufferTooSmall.
+		keyBuf := getKeySlice(0)
+		dataBuf := getValueSlice(0)
+
+		timestamp, keyLen, dataLen, err := cfg.Decoder.Read(keyBuf, dataBuf)
 		if err != nil {
+			// We won't be using these buffers
+			if keyBuf != nil {
+				returnKeySlice(keyBuf)
+			}
+			if dataBuf != nil {
+				returnValueSlice(dataBuf)
+			}
+
 			if err == io.EOF {
 				// End of file reached - flush remaining batch
 				if err := flushBatch(); err != nil {
@@ -148,16 +197,35 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 			return messageCount, err
 		}
 
+		// Limit buffers to the valid decoded lengths
+		if keyLen > 0 {
+			keyBuf = keyBuf[:keyLen]
+		} else {
+			// Return unused key buffer immediately
+			if keyBuf != nil {
+				returnKeySlice(keyBuf)
+			}
+			keyBuf = nil
+		}
+		dataBuf = dataBuf[:dataLen]
+
 		// Filter by find bytes if specified
-		if cfg.FindBytes != nil && !bytes.Contains(entry.Data, cfg.FindBytes) {
+		if cfg.FindBytes != nil && !bytes.Contains(dataBuf, cfg.FindBytes) {
+			// Return buffers for skipped message
+			if keyBuf != nil {
+				returnKeySlice(keyBuf)
+			}
+			if dataBuf != nil {
+				returnValueSlice(dataBuf)
+			}
 			continue
 		}
 
-		// Build Kafka message
+		// Build Kafka message with pooled buffers (returned to pool after flush)
 		kafkaMsg := kafka.Message{
-			Key:   entry.Key,
-			Value: entry.Data,
-			Time:  entry.Timestamp,
+			Key:   keyBuf,
+			Value: dataBuf,
+			Time:  timestamp,
 		}
 		// Set partition if specified in config (nil means auto-assignment)
 		if cfg.Partition != nil {
@@ -166,7 +234,7 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 
 		// Add to batch
 		batch = append(batch, kafkaMsg)
-		batchBytes += int64(len(entry.Data))
+		batchBytes += int64(dataLen)
 		messageCount++
 
 		// Flush batch if it reaches size or byte limit
@@ -184,4 +252,47 @@ func Replay(ctx context.Context, cfg ReplayConfig) (int64, error) {
 	}
 
 	return messageCount, nil
+}
+
+// getKeySlice returns a key buffer slice with length minLen.
+func getKeySlice(minLen int) []byte {
+	buf := keyBufPool.Get().([]byte)
+	if cap(buf) < minLen {
+		buf = make([]byte, minLen, max(minLen*2, keyPoolDefaultCapBytes))
+	}
+	return buf
+}
+
+// getValueSlice returns a value buffer slice with length minLen.
+func getValueSlice(minLen int) []byte {
+	buf := valueBufPool.Get().([]byte)
+	if cap(buf) < minLen {
+		buf = make([]byte, minLen, max(minLen*2, valuePoolDefaultCapBytes))
+	}
+	return buf
+}
+
+func returnKeySlice(key []byte) {
+	if key == nil {
+		return
+	}
+	// Put the slice back into the pool using the full capacity
+	keyBufPool.Put(key[:cap(key)])
+}
+
+func returnValueSlice(value []byte) {
+	if value == nil {
+		return
+	}
+	// Put the slice back into the pool using the full capacity
+	valueBufPool.Put(value[:cap(value)])
+}
+
+// returnBatchBuffersToPool returns Key and Value buffers from batch messages to their pools.
+// Call after the producer has finished with the batch (after WriteMessages returns).
+func returnBatchBuffersToPool(batch []kafka.Message) {
+	for i := range batch {
+		returnKeySlice(batch[i].Key)
+		returnValueSlice(batch[i].Value)
+	}
 }

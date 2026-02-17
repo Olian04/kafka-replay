@@ -3,10 +3,40 @@ package transcoder
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"testing"
 	"time"
 )
+
+func readNoGrow(t *testing.T, decoder *DecodeReader, key, data *[]byte) (time.Time, int, int, error) {
+	t.Helper()
+	for {
+		ts, keyLen, dataLen, err := decoder.Read(*key, *data)
+		if errors.Is(err, ErrBufferTooSmall) {
+			var bse *BufferTooSmallError
+			if errors.As(err, &bse) {
+				if bse.KeyNeeded > 0 && cap(*key) < bse.KeyNeeded {
+					*key = make([]byte, bse.KeyNeeded)
+				}
+				if cap(*data) < bse.DataNeeded {
+					*data = make([]byte, bse.DataNeeded)
+				}
+				continue
+			}
+		}
+		// Reslice to the valid regions for callers that inspect len()/contents.
+		if err == nil {
+			if keyLen > 0 {
+				*key = (*key)[:keyLen]
+			} else if key != nil {
+				*key = (*key)[:0]
+			}
+			*data = (*data)[:dataLen]
+		}
+		return ts, keyLen, dataLen, err
+	}
+}
 
 func TestNewDecodeReader(t *testing.T) {
 	// Create a valid file with header
@@ -76,25 +106,26 @@ func TestDecodeReader_Read(t *testing.T) {
 	}
 
 	// Read message
-	entry, err := decoder.Read()
+	var key, data []byte
+	timestamp, keyLen, dataLen, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if !entry.Timestamp.Equal(testTime) {
-		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, entry.Timestamp)
+	if !timestamp.Equal(testTime) {
+		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, timestamp)
 	}
 
-	if len(entry.Key) > 0 {
-		t.Errorf("Expected nil key, got %q", entry.Key)
+	if keyLen != 0 || len(key) > 0 {
+		t.Errorf("Expected nil key (keyLen=0), got keyLen=%d, key=%q", keyLen, key)
 	}
 
-	if !bytes.Equal(entry.Data, testData) {
-		t.Errorf("Data mismatch: expected %q, got %q", testData, entry.Data)
+	if dataLen != len(testData) || !bytes.Equal(data, testData) {
+		t.Errorf("Data mismatch: expected len=%d %q, got dataLen=%d %q", len(testData), testData, dataLen, data)
 	}
 
 	// Should return EOF on next read
-	_, err = decoder.Read()
+	_, _, _, err = readNoGrow(t, decoder, &key, &data)
 	if err != io.EOF {
 		t.Errorf("Expected EOF, got %v", err)
 	}
@@ -131,22 +162,23 @@ func TestDecodeReader_ReadPreserveTimestamps(t *testing.T) {
 		t.Fatalf("NewDecodeReader failed: %v", err)
 	}
 
-	entry, err := decoder.Read()
+	var key, data []byte
+	timestamp, _, _, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
 	// With preserveTimestamps=true, should get the original timestamp
-	if !entry.Timestamp.Equal(testTime) {
-		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, entry.Timestamp)
+	if !timestamp.Equal(testTime) {
+		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, timestamp)
 	}
 
-	if len(entry.Key) > 0 {
-		t.Errorf("Expected nil key, got %q", entry.Key)
+	if len(key) > 0 {
+		t.Errorf("Expected nil key, got %q", key)
 	}
 
-	if !bytes.Equal(entry.Data, testData) {
-		t.Errorf("Data mismatch: expected %q, got %q", testData, entry.Data)
+	if !bytes.Equal(data, testData) {
+		t.Errorf("Data mismatch: expected %q, got %q", testData, data)
 	}
 }
 
@@ -182,23 +214,24 @@ func TestDecodeReader_ReadWithoutPreserveTimestamps(t *testing.T) {
 	}
 
 	beforeRead := time.Now()
-	entry, err := decoder.Read()
+	var key, data []byte
+	timestamp, _, _, err := readNoGrow(t, decoder, &key, &data)
 	afterRead := time.Now()
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
 	// With preserveTimestamps=false, should get current time
-	if entry.Timestamp.Before(beforeRead) || entry.Timestamp.After(afterRead) {
-		t.Errorf("Expected timestamp between %v and %v, got %v", beforeRead, afterRead, entry.Timestamp)
+	if timestamp.Before(beforeRead) || timestamp.After(afterRead) {
+		t.Errorf("Expected timestamp between %v and %v, got %v", beforeRead, afterRead, timestamp)
 	}
 
-	if len(entry.Key) > 0 {
-		t.Errorf("Expected nil key, got %q", entry.Key)
+	if len(key) > 0 {
+		t.Errorf("Expected nil key, got %q", key)
 	}
 
-	if !bytes.Equal(entry.Data, testData) {
-		t.Errorf("Data mismatch: expected %q, got %q", testData, entry.Data)
+	if !bytes.Equal(data, testData) {
+		t.Errorf("Data mismatch: expected %q, got %q", testData, data)
 	}
 }
 
@@ -242,27 +275,28 @@ func TestDecodeReader_MultipleReads(t *testing.T) {
 	}
 
 	// Read all messages
+	var key, data []byte
 	for i, expectedMsg := range messages {
-		entry, err := decoder.Read()
+		timestamp, _, _, err := readNoGrow(t, decoder, &key, &data)
 		if err != nil {
 			t.Fatalf("Read %d failed: %v", i, err)
 		}
 
-		if !entry.Timestamp.Equal(expectedMsg.timestamp) {
-			t.Errorf("Message %d timestamp mismatch: expected %v, got %v", i, expectedMsg.timestamp, entry.Timestamp)
+		if !timestamp.Equal(expectedMsg.timestamp) {
+			t.Errorf("Message %d timestamp mismatch: expected %v, got %v", i, expectedMsg.timestamp, timestamp)
 		}
 
-		if len(entry.Key) > 0 {
-			t.Errorf("Message %d: expected nil key, got %q", i, entry.Key)
+		if len(key) > 0 {
+			t.Errorf("Message %d: expected nil key, got %q", i, key)
 		}
 
-		if !bytes.Equal(entry.Data, expectedMsg.data) {
-			t.Errorf("Message %d data mismatch: expected %q, got %q", i, expectedMsg.data, entry.Data)
+		if !bytes.Equal(data, expectedMsg.data) {
+			t.Errorf("Message %d data mismatch: expected %q, got %q", i, expectedMsg.data, data)
 		}
 	}
 
 	// Should return EOF
-	_, err = decoder.Read()
+	_, _, _, err = readNoGrow(t, decoder, &key, &data)
 	if err != io.EOF {
 		t.Errorf("Expected EOF, got %v", err)
 	}
@@ -300,10 +334,13 @@ func TestDecodeReader_Reset(t *testing.T) {
 	}
 
 	// Read first message
-	entry1, err := decoder.Read()
+	var key, data []byte
+	timestamp1, _, _, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("First Read failed: %v", err)
 	}
+	key1 := append([]byte(nil), key...)
+	data1 := append([]byte(nil), data...)
 
 	// Reset
 	if err := decoder.Reset(); err != nil {
@@ -311,21 +348,21 @@ func TestDecodeReader_Reset(t *testing.T) {
 	}
 
 	// Read again - should get the same message
-	entry2, err := decoder.Read()
+	timestamp2, _, _, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("Second Read failed: %v", err)
 	}
 
-	if !entry1.Timestamp.Equal(entry2.Timestamp) {
-		t.Errorf("Timestamps don't match after reset: %v != %v", entry1.Timestamp, entry2.Timestamp)
+	if !timestamp1.Equal(timestamp2) {
+		t.Errorf("Timestamps don't match after reset: %v != %v", timestamp1, timestamp2)
 	}
 
-	if !bytes.Equal(entry1.Key, entry2.Key) {
-		t.Errorf("Keys don't match after reset: %q != %q", entry1.Key, entry2.Key)
+	if !bytes.Equal(key1, key) {
+		t.Errorf("Keys don't match after reset: %q != %q", key1, key)
 	}
 
-	if !bytes.Equal(entry1.Data, entry2.Data) {
-		t.Errorf("Data doesn't match after reset: %q != %q", entry1.Data, entry2.Data)
+	if !bytes.Equal(data1, data) {
+		t.Errorf("Data doesn't match after reset: %q != %q", data1, data)
 	}
 }
 
@@ -357,21 +394,22 @@ func TestDecodeReader_EmptyMessage(t *testing.T) {
 		t.Fatalf("NewDecodeReader failed: %v", err)
 	}
 
-	entry, err := decoder.Read()
+	var key, data []byte
+	timestamp, keyLen, dataLen, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if !entry.Timestamp.Equal(testTime) {
-		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, entry.Timestamp)
+	if !timestamp.Equal(testTime) {
+		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, timestamp)
 	}
 
-	if len(entry.Key) > 0 {
-		t.Errorf("Expected nil key, got %q", entry.Key)
+	if keyLen != 0 || len(key) > 0 {
+		t.Errorf("Expected nil key, got keyLen=%d key=%q", keyLen, key)
 	}
 
-	if len(entry.Data) != 0 {
-		t.Errorf("Expected empty data, got %q", entry.Data)
+	if dataLen != 0 || len(data) != 0 {
+		t.Errorf("Expected empty data, got dataLen=%d data=%q", dataLen, data)
 	}
 }
 
@@ -403,7 +441,8 @@ func TestDecodeReader_InvalidSize(t *testing.T) {
 		t.Fatalf("NewDecodeReader failed: %v", err)
 	}
 
-	_, err = decoder.Read()
+	var key, data []byte
+	_, _, _, err = readNoGrow(t, decoder, &key, &data)
 	if err == nil {
 		t.Fatal("Expected error for invalid message size, got nil")
 	}
@@ -443,22 +482,23 @@ func TestDecodeReader_Version1BackwardCompatibility(t *testing.T) {
 	}
 
 	// Read message
-	entry, err := decoder.Read()
+	var key, data []byte
+	timestamp, keyLen, dataLen, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if !entry.Timestamp.Equal(testTime) {
-		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, entry.Timestamp)
+	if !timestamp.Equal(testTime) {
+		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, timestamp)
 	}
 
 	// Version 1 files have no key
-	if len(entry.Key) > 0 {
-		t.Errorf("Expected nil key for version 1 file, got %q", entry.Key)
+	if keyLen != 0 || len(key) > 0 {
+		t.Errorf("Expected nil key for version 1 file, got keyLen=%d %q", keyLen, key)
 	}
 
-	if !bytes.Equal(entry.Data, testData) {
-		t.Errorf("Data mismatch: expected %q, got %q", testData, entry.Data)
+	if dataLen != len(testData) || !bytes.Equal(data, testData) {
+		t.Errorf("Data mismatch: expected dataLen=%d %q, got dataLen=%d %q", len(testData), testData, dataLen, data)
 	}
 }
 
@@ -497,20 +537,21 @@ func TestDecodeReader_Version2WithKey(t *testing.T) {
 	}
 
 	// Read message
-	entry, err := decoder.Read()
+	var key, data []byte
+	timestamp, keyLen, dataLen, err := readNoGrow(t, decoder, &key, &data)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if !entry.Timestamp.Equal(testTime) {
-		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, entry.Timestamp)
+	if !timestamp.Equal(testTime) {
+		t.Errorf("Timestamp mismatch: expected %v, got %v", testTime, timestamp)
 	}
 
-	if !bytes.Equal(entry.Key, testKey) {
-		t.Errorf("Key mismatch: expected %q, got %q", testKey, entry.Key)
+	if keyLen != len(testKey) || !bytes.Equal(key, testKey) {
+		t.Errorf("Key mismatch: expected keyLen=%d %q, got keyLen=%d %q", len(testKey), testKey, keyLen, key)
 	}
 
-	if !bytes.Equal(entry.Data, testData) {
-		t.Errorf("Data mismatch: expected %q, got %q", testData, entry.Data)
+	if dataLen != len(testData) || !bytes.Equal(data, testData) {
+		t.Errorf("Data mismatch: expected dataLen=%d %q, got dataLen=%d %q", len(testData), testData, dataLen, data)
 	}
 }
