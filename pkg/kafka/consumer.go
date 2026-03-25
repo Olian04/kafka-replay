@@ -35,8 +35,19 @@ func (c *Consumer) SetOffset(offset int64) error {
 		return fmt.Errorf("SetOffset is not supported when using consumer groups; offsets are managed automatically")
 	}
 
-	_, err := c.conn.Seek(offset, kafkago.SeekStart)
-	return err
+	switch offset {
+	case -1:
+		// -1 means high watermark
+		_, err := c.conn.Seek(0, kafkago.SeekEnd)
+		return err
+	case 0:
+		// 0 means low watermark
+		_, err := c.conn.Seek(0, kafkago.SeekStart)
+		return err
+	default:
+		_, err := c.conn.Seek(offset, kafkago.SeekAbsolute)
+		return err
+	}
 }
 
 func (c *Consumer) Close() error {
